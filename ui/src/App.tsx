@@ -52,7 +52,22 @@ export function App() {
           Profiles stay on this machine. The model may draft a request. It cannot run one.
         </p>
         <div className="stack">
-          <button className="action" onClick={() => run(() => api.sample())}>
+          <button
+            className="action"
+            onClick={() =>
+              run(async () => {
+                const existing = datasets.find(
+                  (item) => item.name === "Orders" && item.source_kind === "csv" && !item.parent_id,
+                )
+                if (existing) {
+                  setSelected(existing.id)
+                  return
+                }
+                const created = await api.sample()
+                setSelected(created.id)
+              })
+            }
+          >
             Load sample orders
           </button>
           <Upload onFile={(file) => run(() => api.upload(file.name.replace(/\.[^.]+$/, ""), file))} />
@@ -96,7 +111,15 @@ export function App() {
             {tab === "profile" ? <Profile id={current.id} datasets={datasets} /> : null}
             {tab === "ask" ? <Ask id={current.id} /> : null}
             {tab === "sql" ? <SqlDesk id={current.id} datasets={datasets} /> : null}
-            {tab === "pipeline" ? <PipelineDesk id={current.id} onDone={refresh} /> : null}
+            {tab === "pipeline" ? (
+              <PipelineDesk
+                id={current.id}
+                onDone={async (childId) => {
+                  await refresh()
+                  if (childId) setSelected(childId)
+                }}
+              />
+            ) : null}
             {tab === "model" ? <ModelDesk id={current.id} status={model} onDone={refresh} /> : null}
           </>
         )}
@@ -114,6 +137,7 @@ function Upload({ onFile }: { onFile: (file: File) => void }) {
         accept=".csv,.parquet"
         onChange={(event) => {
           const file = event.target.files?.[0]
+          event.target.value = ""
           if (file) onFile(file)
         }}
       />
@@ -129,27 +153,34 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
   const [focus, setFocus] = useState<string | null>(null)
   const [detail, setDetail] = useState<ColumnDetail | null>(null)
   const [preview, setPreview] = useState("")
-  const [note, setNote] = useState("")
+  const [saved, setSaved] = useState("")
+  const [localError, setLocalError] = useState("")
+  const [sample, setSample] = useState<Record<string, unknown>[]>([])
   const current = datasets.find((item) => item.id === id)
 
   useEffect(() => {
     setFocus(null)
     setDetail(null)
     setPreview("")
-    setNote("")
-    Promise.all([api.profile(id), api.quality(id), api.suggestions(id)]).then(
-      ([profile, quality, suggested]) => {
+    setSaved("")
+    setLocalError("")
+    Promise.all([api.profile(id), api.quality(id), api.suggestions(id)])
+      .then(([profile, quality, suggested]) => {
         setColumns(profile.columns)
+        setSample(profile.sample)
         setIssues(quality.issues)
         setStatus(quality.status)
         setActions(suggested.actions)
-      },
-    )
+      })
+      .catch((reason: unknown) => setLocalError(message(reason)))
   }, [id])
 
   useEffect(() => {
     if (!focus) return
-    api.column(id, focus).then(setDetail).catch(() => setDetail(null))
+    api.column(id, focus).then(setDetail).catch((reason: unknown) => {
+      setDetail(null)
+      setLocalError(message(reason))
+    })
   }, [id, focus])
 
   const parent = datasets.find((item) => item.id === current?.parent_id)
@@ -158,9 +189,10 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
   return (
     <div className="grid">
       <p className={status === "pass" ? "status" : "status warn"}>Quality {status || "…"}</p>
+      {localError ? <p className="err">{localError}</p> : null}
       {issues.map((issue) => (
-        <p key={`${issue.code}-${issue.column}`} className="note">
-          {issue.severity}: {issue.detail}
+        <p key={`${issue.code}-${issue.column}`} className={`issue ${issue.severity}`}>
+          {issue.detail}
         </p>
       ))}
       {(parent || children.length > 0 || current?.lineage) ? (
@@ -186,10 +218,16 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
                 key={action.id}
                 className="ghost"
                 onClick={() =>
-                  api.preview(id, action.steps).then((result) => {
-                    setPreview(`${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`)
-                    setNote(action.reason)
-                  })
+                  api
+                    .preview(id, action.steps)
+                    .then((result) => {
+                      setLocalError("")
+                      setPreview(
+                        `${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`,
+                      )
+                      setSaved(action.reason)
+                    })
+                    .catch((reason: unknown) => setLocalError(message(reason)))
                 }
               >
                 {action.label}
@@ -200,7 +238,8 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
           )}
         </div>
       ) : null}
-      {preview ? <p className="note">{note} {preview}</p> : null}
+      {saved ? <p className="note">{saved}</p> : null}
+      {preview ? <p className="note">{preview}</p> : null}
       <div className="sheet">
         <table>
           <thead>
@@ -235,11 +274,14 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
             <button
               className="action"
               onClick={() =>
-                api.draftSql(id, {
-                  select: [detail.column],
-                  metrics: [{ fn: "count", alias: "n" }],
-                  order_by: "n",
-                }).then(() => setNote(`Draft saved for ${detail.column}. Approve it on the SQL tab.`))
+                api
+                  .draftSql(id, {
+                    select: [detail.column],
+                    metrics: [{ fn: "count", alias: "n" }],
+                    order_by: "n",
+                  })
+                  .then(() => setSaved(`Draft saved for ${detail.column}. Approve it on the SQL tab.`))
+                  .catch((reason: unknown) => setLocalError(message(reason)))
               }
             >
               Draft group-by
@@ -247,9 +289,15 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
             <button
               className="ghost"
               onClick={() =>
-                api.preview(id, [{ op: "drop_nulls", columns: [detail.column] }]).then((result) => {
-                  setPreview(`${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`)
-                })
+                api
+                  .preview(id, [{ op: "drop_nulls", columns: [detail.column] }])
+                  .then((result) => {
+                    setLocalError("")
+                    setPreview(
+                      `${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`,
+                    )
+                  })
+                  .catch((reason: unknown) => setLocalError(message(reason)))
               }
             >
               Preview drop nulls
@@ -265,6 +313,12 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
           ) : null}
         </div>
       ) : null}
+      {sample.length > 0 ? (
+        <div className="grid">
+          <p className="note">Masked sample. Sensitive values are hidden.</p>
+          <ResultTable rows={sample} />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -273,6 +327,15 @@ function Ask({ id }: { id: string }) {
   const [question, setQuestion] = useState("Are there duplicates?")
   const [answer, setAnswer] = useState("")
   const [grounded, setGrounded] = useState<boolean | null>(null)
+  const [evidence, setEvidence] = useState<{ source: string; detail: string }[]>([])
+  const [localError, setLocalError] = useState("")
+
+  useEffect(() => {
+    setAnswer("")
+    setGrounded(null)
+    setEvidence([])
+    setLocalError("")
+  }, [id])
 
   return (
     <div className="grid">
@@ -282,19 +345,32 @@ function Ask({ id }: { id: string }) {
         <button
           className="action"
           onClick={() => {
-            api.ask(id, question).then((result) => {
-              setAnswer(result.answer)
-              setGrounded(result.grounded)
-            })
+            setLocalError("")
+            api
+              .ask(id, question)
+              .then((result) => {
+                setAnswer(result.answer)
+                setGrounded(result.grounded)
+                setEvidence(result.evidence)
+              })
+              .catch((reason: unknown) => setLocalError(message(reason)))
           }}
         >
           Ask the file
         </button>
       </div>
+      {localError ? <p className="err">{localError}</p> : null}
       {answer ? (
         <div className="banner">
           <strong>{grounded ? "From the file" : "Not in the file"}</strong>
           <p>{answer}</p>
+          {evidence.length > 0 ? (
+            <ul className="evidence">
+              {evidence.map((item) => (
+                <li key={`${item.source}-${item.detail}`}>{item.detail}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -307,11 +383,18 @@ function SqlDesk({ id, datasets }: { id: string; datasets: Dataset[] }) {
   const [rightColumn, setRightColumn] = useState("region")
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
+  const [localError, setLocalError] = useState("")
 
   const load = useCallback(() => {
-    api.drafts(id).then((result) => setDrafts(result.drafts))
+    api.drafts(id).then((result) => setDrafts(result.drafts)).catch((reason: unknown) => {
+      setLocalError(message(reason))
+    })
   }, [id])
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    setRows([])
+    setLocalError("")
+    load()
+  }, [load])
 
   const others = datasets.filter((item) => item.id !== id)
 
@@ -348,12 +431,19 @@ function SqlDesk({ id, datasets }: { id: string; datasets: Dataset[] }) {
             if (joinId) {
               spec.join = { dataset_id: joinId, left: column, right: rightColumn, how: "left" }
             }
-            api.draftSql(id, spec).then(load)
+            api
+              .draftSql(id, spec)
+              .then(() => {
+                setLocalError("")
+                load()
+              })
+              .catch((reason: unknown) => setLocalError(message(reason)))
           }}
         >
           Draft SQL
         </button>
       </div>
+      {localError ? <p className="err">{localError}</p> : null}
       {drafts.map((draft) => (
         <article key={draft.id} className="card">
           <p className="mono">{draft.sql}</p>
@@ -361,12 +451,24 @@ function SqlDesk({ id, datasets }: { id: string; datasets: Dataset[] }) {
           <div className="row">
             {draft.status === "drafted" ? (
               <>
-                <button className="action" onClick={() => api.decide(id, draft.id, "approve").then(load)}>Approve</button>
-                <button className="ghost bad" onClick={() => api.decide(id, draft.id, "reject").then(load)}>Reject</button>
+                <button className="action" onClick={() => api.decide(id, draft.id, "approve").then(() => { setLocalError(""); load() }).catch((reason: unknown) => setLocalError(message(reason)))}>Approve</button>
+                <button className="ghost bad" onClick={() => api.decide(id, draft.id, "reject").then(() => { setLocalError(""); load() }).catch((reason: unknown) => setLocalError(message(reason)))}>Reject</button>
               </>
             ) : null}
             {draft.status === "approved" ? (
-              <button className="action" onClick={() => api.execute(id, draft.id).then((result) => { setRows(result.rows); load() })}>
+              <button
+                className="action"
+                onClick={() =>
+                  api
+                    .execute(id, draft.id)
+                    .then((result) => {
+                      setLocalError("")
+                      setRows(result.rows)
+                      load()
+                    })
+                    .catch((reason: unknown) => setLocalError(message(reason)))
+                }
+              >
                 Run approved SQL
               </button>
             ) : null}
@@ -383,33 +485,56 @@ function SqlDesk({ id, datasets }: { id: string; datasets: Dataset[] }) {
   )
 }
 
-function PipelineDesk({ id, onDone }: { id: string; onDone: () => Promise<void> }) {
+function PipelineDesk({ id, onDone }: { id: string; onDone: (childId?: string) => Promise<void> }) {
   const [plan, setPlan] = useState<string[]>([])
   const [counts, setCounts] = useState("")
   const [sample, setSample] = useState<Record<string, unknown>[]>([])
   const [column, setColumn] = useState("amount")
+  const [fillColumn, setFillColumn] = useState("status")
   const [dtype, setDtype] = useState("float")
   const [fillValue, setFillValue] = useState("unknown")
+  const [localError, setLocalError] = useState("")
   const dedupe = [{ op: "dedupe" }]
 
+  useEffect(() => {
+    setPlan([])
+    setCounts("")
+    setSample([])
+    setLocalError("")
+  }, [id])
+
   function show(result: { plan: string[]; input_rows: number; output_rows: number; writes: boolean; sample: Record<string, unknown>[] }) {
+    setLocalError("")
     setPlan(result.plan)
     setCounts(`${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`)
     setSample(result.sample)
   }
 
+  function fail(reason: unknown) {
+    setLocalError(message(reason))
+  }
+
   return (
     <div className="grid">
       <p className="note">Preview stays local. Nothing is saved until you approve.</p>
+      {localError ? <p className="err">{localError}</p> : null}
       <div className="row">
-        <button className="ghost" onClick={() => api.preview(id, dedupe).then(show)}>Preview dedupe</button>
-        <button className="action" onClick={() => api.materialize(id, dedupe, "Deduped").then(() => onDone())}>
+        <button className="ghost" onClick={() => api.preview(id, dedupe).then(show).catch(fail)}>Preview dedupe</button>
+        <button
+          className="action"
+          onClick={() =>
+            api
+              .materialize(id, dedupe, "Deduped")
+              .then((created) => onDone(created.id))
+              .catch(fail)
+          }
+        >
           Approve and keep a local copy
         </button>
       </div>
       <div className="row">
         <label>
-          Column
+          Cast column
           <input value={column} onChange={(event) => setColumn(event.target.value)} />
         </label>
         <label>
@@ -421,16 +546,23 @@ function PipelineDesk({ id, onDone }: { id: string; onDone: () => Promise<void> 
           </select>
         </label>
         <label>
+          Fill column
+          <input value={fillColumn} onChange={(event) => setFillColumn(event.target.value)} />
+        </label>
+        <label>
           Fill nulls with
           <input value={fillValue} onChange={(event) => setFillValue(event.target.value)} />
         </label>
         <button
           className="ghost"
           onClick={() =>
-            api.preview(id, [
-              { op: "cast", columns: [column], dtype },
-              { op: "fill", columns: [column], fill_value: fillValue },
-            ]).then(show)
+            api
+              .preview(id, [
+                { op: "cast", columns: [column], dtype },
+                { op: "fill", columns: [fillColumn], fill_value: fillValue },
+              ])
+              .then(show)
+              .catch(fail)
           }
         >
           Preview cast and fill
@@ -506,6 +638,10 @@ function ModelDesk({
       ) : null}
     </div>
   )
+}
+
+function message(reason: unknown): string {
+  return reason instanceof Error ? reason.message : "Request failed"
 }
 
 function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {

@@ -203,6 +203,11 @@ tr:last-child td { border-bottom: 0; }
 }
 
 .warn { color: var(--warn); }
+.issue { font-size: 13px; line-height: 1.45; margin: 0; color: var(--muted); }
+.issue.warning { color: var(--warn); }
+.issue.error { color: var(--bad); }
+.evidence { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.evidence li + li { margin-top: 4px; }
 .err {
   color: var(--bad);
   margin: 0 0 12px;
