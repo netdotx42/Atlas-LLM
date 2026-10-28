@@ -15,6 +15,7 @@ export default defineConfig({
       "/datasets": api,
       "/auth": api,
       "/review": api,
+      "/demo": api,
     },
   },
 })

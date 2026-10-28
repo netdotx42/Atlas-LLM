@@ -250,6 +250,7 @@ def _public(path: str) -> bool:
         "/auth/passes",
         "/auth/webhook",
         "/auth/logout",
+        "/demo",
         "/",
     }:
         return True

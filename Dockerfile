@@ -11,6 +11,7 @@ WORKDIR /app
 RUN useradd --create-home --uid 10001 atlas
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
+COPY samples ./samples
 COPY ui/dist ./ui/dist
 RUN uv sync --no-dev --no-editable \
     && chown -R atlas:atlas /app \

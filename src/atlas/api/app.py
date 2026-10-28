@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 from atlas import __version__
 from atlas.auth.routes import install_auth
 from atlas.config import Settings
+from atlas.demo import build_demo
 from atlas.explore.ask import answer_question
 from atlas.explore.suggest import suggest_actions
 from atlas.ingest.loader import IngestError, ingest_file
@@ -73,6 +74,13 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "version": __version__, "read_only": settings.read_only}
+
+    @app.get("/demo")
+    def demo() -> dict:
+        sample = _sample_csv()
+        if sample is None:
+            raise HTTPException(status_code=404, detail="The sample file is not on this install")
+        return build_demo(sample, null_error_rate=settings.null_error_rate)
 
     @app.get("/safety")
     def safety() -> dict:

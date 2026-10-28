@@ -426,5 +426,55 @@ button.price:disabled { opacity: 0.6; cursor: wait; }
     gap: 28px;
   }
   .lede { font-size: 32px; }
-  .offer-facts, .prices, .account-gate .prices { grid-template-columns: 1fr; }
+  .offer-facts, .prices, .account-gate .prices, .demo-grid { grid-template-columns: 1fr; }
+  .demo { width: min(1120px, calc(100% - 32px)); }
+  .demo h2 { font-size: 28px; }
+}
+
+.demo {
+  width: min(1120px, calc(100% - 48px));
+  margin: 8px auto 80px;
+}
+
+.demo h2 {
+  margin-top: 12px;
+  max-width: 16ch;
+  font-size: 32px;
+}
+
+.demo-lead { max-width: 58ch; margin-top: 8px; }
+
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.demo-card { display: grid; align-content: start; gap: 10px; }
+.demo-card h3 { font-size: 16px; }
+.demo-asks { display: grid; gap: 6px; }
+.demo-card .ghost { width: 100%; }
+.demo-card .ghost.active {
+  background: linear-gradient(180deg, #f7f7f8 0%, #c9c9ce 100%);
+  color: #111113;
+  border-color: transparent;
+}
+.demo-lock {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.demo .action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: none;
+}
+
+@media (max-width: 800px) {
+  .demo { width: min(1120px, calc(100% - 32px)); }
+  .demo h2 { font-size: 28px; }
+  .demo-grid { grid-template-columns: 1fr; }
 }

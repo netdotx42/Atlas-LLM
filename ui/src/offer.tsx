@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { api, type Pass, type Session } from "./api"
 import { Mark } from "./mark"
+import { Demo } from "./demo"
 
 const FACTS: [string, string][] = [
   ["Project", "Rows, source, and lineage. Writes stay off until you approve."],
@@ -56,7 +57,8 @@ export function Offer({
   }
 
   return (
-    <main className={auth ? "offer" : "offer offer-local"}>
+    <div className="offer-page">
+      <main className={auth ? "offer" : "offer offer-local"}>
       <section className="offer-copy">
         <div className="brand">
           <Mark />
@@ -113,6 +115,9 @@ export function Offer({
           <button className="action" type="submit">
             {mode === "register" ? "Start trial" : "Sign in"}
           </button>
+          <a className="link" href="#demo">
+            Or try the free sample first
+          </a>
           <button
             className="ghost"
             type="button"
@@ -133,6 +138,8 @@ export function Offer({
           </button>
         </section>
       )}
-    </main>
+      </main>
+      <Demo />
+    </div>
   )
 }

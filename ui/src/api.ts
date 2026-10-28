@@ -113,6 +113,18 @@ export type Pass = {
   label: string
 }
 
+export type DemoReport = {
+  capped: boolean
+  name: string
+  rows: number
+  columns: number
+  writes: boolean
+  uploads: boolean
+  keeps: boolean
+  asks: { id: string; question: string; grounded: boolean; answer: string | null }[]
+  pipeline: { plan: string[]; input_rows: number; output_rows: number; writes: boolean }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   const body = (await response.json().catch(() => ({}))) as { detail?: string }
@@ -138,6 +150,7 @@ export const api = {
     }),
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   passes: () => request<{ passes: Pass[] }>("/auth/passes"),
+  demo: () => request<DemoReport>("/demo"),
   checkout: (plan: string) =>
     request<{ url: string }>("/auth/checkout", {
       method: "POST",
