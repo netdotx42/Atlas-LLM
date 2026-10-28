@@ -1,5 +1,9 @@
 # ATLAS
 
+<img src="docs/brand/github-card.png" alt="ATLAS. A private desk for files you already have. It drafts. You approve." width="880">
+
+A private desk for files you already have. It drafts. You approve.
+
 Private data-engineering assistant. Python-first, local-first, free to run on data you already have.
 
 ATLAS profiles approved CSV and Parquet files, answers questions from those files, drafts SQL that waits for approval, and previews a small set of transformations before keeping a local copy.

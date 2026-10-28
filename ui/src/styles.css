@@ -50,6 +50,9 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -0.03em; }
 }
 
 .mark { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.arc { width: 22px; height: 22px; flex: none; color: var(--ink); }
+.arc path { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
 .rail h1 { font-size: 20px; letter-spacing: 0.28em; font-weight: 500; }
 .mark span {
   letter-spacing: 0.16em;
