@@ -28,6 +28,19 @@ uv run atlas
 
 Open `http://127.0.0.1:8000`. For UI work, run the API and `npm run dev` in `ui/` (port 5173, API proxied).
 
+## Hosted desk
+
+A local install leaves sign-in off. On the host, set:
+
+```bash
+ATLAS_AUTH_ENABLED=true
+ATLAS_STRIPE_SECRET_KEY=sk_live_...
+ATLAS_STRIPE_WEBHOOK_SECRET=whsec_...
+ATLAS_PUBLIC_BASE_URL=https://your-host.example
+```
+
+The first page then shows what the desk does, the 14-day trial, and the one-time passes: 30 days for $29, 90 days for $69, and 365 days for $179. No card on the trial. No renewal. Point the Stripe webhook at `POST /auth/webhook` for `checkout.session.completed`.
+
 ## Local model
 
 Phi-3.5-mini-instruct, MIT, via llama.cpp. It drafts JSON only. See [docs/MODEL.md](docs/MODEL.md).
