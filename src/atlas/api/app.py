@@ -6,8 +6,8 @@ from uuid import uuid4
 
 import duckdb
 import polars as pl
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from atlas import __version__
@@ -801,6 +801,32 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
+def _share_host(raw: str) -> str:
+    host = raw.split(",")[0].strip().split(":")[0].lower()
+    if not host or "." not in host or not re.fullmatch(r"[a-z0-9.-]+", host):
+        return ""
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
+        return ""
+    if host in {"vercel.app", "vercel.com"} or host.endswith((".vercel.app", ".vercel.com")):
+        return ""
+    return host
+
+
+def _with_share_tags(html: str, host: str) -> str:
+    if not host or 'property="x:game:image"' in html:
+        return html
+    tags = (
+        f'<meta property="og:image" content="https://{host}/og.jpg">'
+        '<meta property="og:image:width" content="1200">'
+        '<meta property="og:image:height" content="630">'
+        '<meta property="og:type" content="x:game">'
+        f'<meta property="x:game:image" content="https://{host}/x-banner.jpg">'
+        '<meta property="x:game:image:width" content="1200">'
+        '<meta property="x:game:image:height" content="264">'
+    )
+    return html.replace("</head>", tags + "</head>", 1)
+
+
 def _sample_csv() -> Path | None:
     candidates = [
         Path("samples/orders.csv"),
@@ -814,17 +840,22 @@ def _mount_ui(app: FastAPI, ui_dir: Path) -> None:
     if not index.is_file():
         return
 
-    @app.get("/", include_in_schema=False)
-    def desk():
-        return FileResponse(index)
+    def page(request: Request) -> HTMLResponse:
+        forwarded = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+        html = _with_share_tags(index.read_text(encoding="utf-8"), _share_host(forwarded))
+        return HTMLResponse(html)
 
-    @app.get("/{full_path:path}", include_in_schema=False)
-    def desk_file(full_path: str):
+    @app.get("/", include_in_schema=False)
+    def desk(request: Request) -> HTMLResponse:
+        return page(request)
+
+    @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
+    def desk_file(full_path: str, request: Request) -> HTMLResponse | FileResponse:
         root = ui_dir.resolve()
         candidate = (ui_dir / full_path).resolve()
         if candidate.is_file() and (candidate == root or root in candidate.parents):
             return FileResponse(candidate)
-        return FileResponse(index)
+        return page(request)
 
 
 app = create_app()
