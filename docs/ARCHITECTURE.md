@@ -20,7 +20,7 @@ There is no path that writes to a production database. `approve: true` on a pipe
 
 ## What the local model is allowed to do
 
-Phi-3.5-mini-instruct (MIT, llama.cpp) returns one JSON object. `ask` is answered by the deterministic router. `sql` is compiled to a `DraftSpec`, gated by `prepare_select`, and stored as `drafted`. `pipeline` is previewed and not written. `executed` is always false. Weights are downloaded by `atlas pull-model` and are not in git. Column ranking uses a local feature-hash embedding.
+Phi-3.5-mini-instruct (MIT, llama.cpp) returns one JSON object. `ask` is answered by the deterministic router. `sql` is compiled to a `DraftSpec`, gated by `prepare_select`, and stored as `drafted`. A spec may left-join one other warehouse dataset; the physical name is `ds_<id>` and both files are loaded before external access is turned off. `pipeline` is previewed and not written. Steps include `cast` and `fill`. `executed` is always false until a person approves. Quality can flag candidate keys, constant columns, and a schema change versus the previous upload of the same name. Suggested actions are derived from that report and are previews, not runs.
 
 ## Process model
 

@@ -23,6 +23,13 @@ class Metric(BaseModel):
     column: str | None = None
 
 
+class JoinSpec(BaseModel):
+    dataset_id: str = Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")
+    left: str
+    right: str
+    how: Literal["inner", "left"] = "left"
+
+
 class DraftSpec(BaseModel):
     select: list[str] = Field(default_factory=list)
     metrics: list[Metric] = Field(default_factory=list)
@@ -30,6 +37,7 @@ class DraftSpec(BaseModel):
     order_by: str | None = None
     descending: bool = True
     limit: int | None = Field(default=None, ge=1, le=100_000)
+    join: JoinSpec | None = None
 
 
 def quote_ident(name: str) -> str:

@@ -15,13 +15,21 @@ _COMPARE = {
     "lte": lambda column, value: pl.col(column) <= value,
 }
 
+_CAST_DTYPES = {
+    "string": pl.Utf8,
+    "int": pl.Int64,
+    "float": pl.Float64,
+}
+
 
 class Step(BaseModel):
-    op: Literal["select", "drop_nulls", "dedupe", "rename", "filter", "sort"]
+    op: Literal["select", "drop_nulls", "dedupe", "rename", "filter", "sort", "cast", "fill"]
     columns: list[str] = Field(default_factory=list)
     rename: dict[str, str] = Field(default_factory=dict)
     where: list[Filter] = Field(default_factory=list)
     descending: bool = False
+    dtype: Literal["string", "int", "float"] | None = None
+    fill_value: str | int | float | None = None
 
 
 class PipelineError(ValueError):
@@ -97,6 +105,29 @@ def _apply(frame: pl.DataFrame, step: Step) -> tuple[pl.DataFrame, str]:
             frame.sort(step.columns, descending=step.descending),
             "sort " + ", ".join(step.columns),
         )
+    if step.op == "cast":
+        _require_columns(step.columns, known)
+        target = _CAST_DTYPES.get(step.dtype or "")
+        if target is None:
+            raise PipelineError("cast needs a dtype")
+        current = frame
+        for name in step.columns:
+            try:
+                current = current.with_columns(pl.col(name).cast(target, strict=True))
+            except (pl.exceptions.PolarsError, TypeError) as exc:
+                raise PipelineError(f"Cannot cast {name} to {step.dtype}") from exc
+        return current, f"cast {', '.join(step.columns)} to {step.dtype}"
+    if step.op == "fill":
+        _require_columns(step.columns, known)
+        if step.fill_value is None:
+            raise PipelineError("fill needs a value")
+        current = frame
+        for name in step.columns:
+            try:
+                current = current.with_columns(pl.col(name).fill_null(step.fill_value))
+            except (pl.exceptions.PolarsError, TypeError) as exc:
+                raise PipelineError(f"Cannot fill {name}") from exc
+        return current, f"fill nulls in {', '.join(step.columns)} with {step.fill_value}"
     raise PipelineError(f"Unsupported step: {step.op}")
 
 

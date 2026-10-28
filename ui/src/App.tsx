@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { api, type Dataset, type Draft, type ModelStatus, type ProfileColumn, type QualityIssue } from "./api"
+import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type ProfileColumn, type QualityIssue, type Suggestion } from "./api"
 
 type Tab = "profile" | "ask" | "sql" | "pipeline" | "model"
 
@@ -93,9 +93,9 @@ export function App() {
                 </button>
               ))}
             </nav>
-            {tab === "profile" ? <Profile id={current.id} /> : null}
+            {tab === "profile" ? <Profile id={current.id} datasets={datasets} /> : null}
             {tab === "ask" ? <Ask id={current.id} /> : null}
-            {tab === "sql" ? <SqlDesk id={current.id} /> : null}
+            {tab === "sql" ? <SqlDesk id={current.id} datasets={datasets} /> : null}
             {tab === "pipeline" ? <PipelineDesk id={current.id} onDone={refresh} /> : null}
             {tab === "model" ? <ModelDesk id={current.id} status={model} onDone={refresh} /> : null}
           </>
@@ -121,20 +121,39 @@ function Upload({ onFile }: { onFile: (file: File) => void }) {
   )
 }
 
-function Profile({ id }: { id: string }) {
+function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
   const [columns, setColumns] = useState<ProfileColumn[]>([])
   const [issues, setIssues] = useState<QualityIssue[]>([])
   const [status, setStatus] = useState("")
-  const [sample, setSample] = useState<Record<string, unknown>[]>([])
+  const [actions, setActions] = useState<Suggestion[]>([])
+  const [focus, setFocus] = useState<string | null>(null)
+  const [detail, setDetail] = useState<ColumnDetail | null>(null)
+  const [preview, setPreview] = useState("")
+  const [note, setNote] = useState("")
+  const current = datasets.find((item) => item.id === id)
 
   useEffect(() => {
-    Promise.all([api.profile(id), api.quality(id)]).then(([profile, quality]) => {
-      setColumns(profile.columns)
-      setSample(profile.sample)
-      setIssues(quality.issues)
-      setStatus(quality.status)
-    })
+    setFocus(null)
+    setDetail(null)
+    setPreview("")
+    setNote("")
+    Promise.all([api.profile(id), api.quality(id), api.suggestions(id)]).then(
+      ([profile, quality, suggested]) => {
+        setColumns(profile.columns)
+        setIssues(quality.issues)
+        setStatus(quality.status)
+        setActions(suggested.actions)
+      },
+    )
   }, [id])
+
+  useEffect(() => {
+    if (!focus) return
+    api.column(id, focus).then(setDetail).catch(() => setDetail(null))
+  }, [id, focus])
+
+  const parent = datasets.find((item) => item.id === current?.parent_id)
+  const children = datasets.filter((item) => item.parent_id === id)
 
   return (
     <div className="grid">
@@ -144,24 +163,108 @@ function Profile({ id }: { id: string }) {
           {issue.severity}: {issue.detail}
         </p>
       ))}
-      <div className="sheet">
-      <table>
-        <thead>
-          <tr><th>Column</th><th>Type</th><th>Nulls</th><th>Distinct</th></tr>
-        </thead>
-        <tbody>
-          {columns.map((column) => (
-            <tr key={column.column}>
-              <td>{column.column}{column.sensitive ? " · masked" : ""}</td>
-              <td>{column.type}</td>
-              <td>{column.sensitive ? "—" : column.null_percentage ?? "—"}</td>
-              <td>{column.sensitive ? "—" : column.approx_unique ?? "—"}</td>
-            </tr>
+      {(parent || children.length > 0 || current?.lineage) ? (
+        <div className="card">
+          <strong>Lineage</strong>
+          {parent ? <p className="note">From {parent.name}</p> : null}
+          {current?.lineage?.map((step, index) => (
+            <p key={`${step.op}-${index}`} className="mono">
+              {index + 1}. {step.op}
+              {step.columns?.length ? ` ${step.columns.join(", ")}` : ""}
+            </p>
           ))}
-        </tbody>
-      </table>
+          {children.map((child) => (
+            <p key={child.id} className="note">Child {child.name} · {child.row_count} rows</p>
+          ))}
+        </div>
+      ) : null}
+      {actions.length > 0 ? (
+        <div className="row">
+          {actions.map((action) =>
+            action.steps.length > 0 ? (
+              <button
+                key={action.id}
+                className="ghost"
+                onClick={() =>
+                  api.preview(id, action.steps).then((result) => {
+                    setPreview(`${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`)
+                    setNote(action.reason)
+                  })
+                }
+              >
+                {action.label}
+              </button>
+            ) : (
+              <p key={action.id} className="note">{action.label}. {action.reason}</p>
+            ),
+          )}
+        </div>
+      ) : null}
+      {preview ? <p className="note">{note} {preview}</p> : null}
+      <div className="sheet">
+        <table>
+          <thead>
+            <tr><th>Column</th><th>Type</th><th>Nulls</th><th>Distinct</th></tr>
+          </thead>
+          <tbody>
+            {columns.map((column) => (
+              <tr key={column.column} className={focus === column.column ? "picked" : ""}>
+                <td>
+                  <button className="link" onClick={() => setFocus(column.column)}>
+                    {column.column}
+                  </button>
+                  {column.sensitive ? " · masked" : ""}
+                </td>
+                <td>{column.type}</td>
+                <td>{column.sensitive ? "—" : percent(column.null_percentage)}</td>
+                <td>{column.sensitive ? "—" : column.approx_unique ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      {sample.length > 0 ? <pre className="mono">{JSON.stringify(sample, null, 2)}</pre> : null}
+      {detail ? (
+        <div className="card">
+          <strong>{detail.column}</strong>
+          <p className="note">
+            {detail.sensitive
+              ? "Masked. Values stay hidden."
+              : `${percent(detail.null_percentage)} null · ${detail.distinct} distinct`}
+          </p>
+          <div className="row">
+            <button
+              className="action"
+              onClick={() =>
+                api.draftSql(id, {
+                  select: [detail.column],
+                  metrics: [{ fn: "count", alias: "n" }],
+                  order_by: "n",
+                }).then(() => setNote(`Draft saved for ${detail.column}. Approve it on the SQL tab.`))
+              }
+            >
+              Draft group-by
+            </button>
+            <button
+              className="ghost"
+              onClick={() =>
+                api.preview(id, [{ op: "drop_nulls", columns: [detail.column] }]).then((result) => {
+                  setPreview(`${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`)
+                })
+              }
+            >
+              Preview drop nulls
+            </button>
+          </div>
+          {detail.top.length > 0 ? (
+            <>
+              <ResultTable rows={detail.top.map((item) => ({ value: item.value, n: item.n }))} />
+              <button className="ghost" onClick={() => downloadCsv(`${detail.column}.csv`, detail.top)}>
+                Download CSV
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -174,6 +277,7 @@ function Ask({ id }: { id: string }) {
   return (
     <div className="grid">
       <textarea value={question} onChange={(event) => setQuestion(event.target.value)} />
+      <p className="note">Try average of amount, how many distinct region, or is order_id a key.</p>
       <div>
         <button
           className="action"
@@ -197,8 +301,10 @@ function Ask({ id }: { id: string }) {
   )
 }
 
-function SqlDesk({ id }: { id: string }) {
+function SqlDesk({ id, datasets }: { id: string; datasets: Dataset[] }) {
   const [column, setColumn] = useState("region")
+  const [joinId, setJoinId] = useState("")
+  const [rightColumn, setRightColumn] = useState("region")
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
 
@@ -207,6 +313,8 @@ function SqlDesk({ id }: { id: string }) {
   }, [id])
   useEffect(() => { load() }, [load])
 
+  const others = datasets.filter((item) => item.id !== id)
+
   return (
     <div className="grid">
       <div className="row">
@@ -214,15 +322,34 @@ function SqlDesk({ id }: { id: string }) {
           Group by
           <input value={column} onChange={(event) => setColumn(event.target.value)} />
         </label>
+        <label>
+          Join dataset
+          <select value={joinId} onChange={(event) => setJoinId(event.target.value)}>
+            <option value="">None</option>
+            {others.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </label>
+        {joinId ? (
+          <label>
+            Right column
+            <input value={rightColumn} onChange={(event) => setRightColumn(event.target.value)} />
+          </label>
+        ) : null}
         <button
           className="action"
-          onClick={() =>
-            api.draftSql(id, {
+          onClick={() => {
+            const spec: Record<string, unknown> = {
               select: [column],
               metrics: [{ fn: "count", alias: "n" }],
               order_by: "n",
-            }).then(load)
-          }
+            }
+            if (joinId) {
+              spec.join = { dataset_id: joinId, left: column, right: rightColumn, how: "left" }
+            }
+            api.draftSql(id, spec).then(load)
+          }}
         >
           Draft SQL
         </button>
@@ -246,7 +373,12 @@ function SqlDesk({ id }: { id: string }) {
           </div>
         </article>
       ))}
-      {rows.length > 0 ? <pre className="mono">{JSON.stringify(rows, null, 2)}</pre> : null}
+      {rows.length > 0 ? (
+        <div className="grid">
+          <ResultTable rows={rows} />
+          <button className="ghost" onClick={() => downloadCsv("query.csv", rows)}>Download CSV</button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -254,32 +386,64 @@ function SqlDesk({ id }: { id: string }) {
 function PipelineDesk({ id, onDone }: { id: string; onDone: () => Promise<void> }) {
   const [plan, setPlan] = useState<string[]>([])
   const [counts, setCounts] = useState("")
-  const steps = [{ op: "dedupe" }]
+  const [sample, setSample] = useState<Record<string, unknown>[]>([])
+  const [column, setColumn] = useState("amount")
+  const [dtype, setDtype] = useState("float")
+  const [fillValue, setFillValue] = useState("unknown")
+  const dedupe = [{ op: "dedupe" }]
+
+  function show(result: { plan: string[]; input_rows: number; output_rows: number; writes: boolean; sample: Record<string, unknown>[] }) {
+    setPlan(result.plan)
+    setCounts(`${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`)
+    setSample(result.sample)
+  }
 
   return (
     <div className="grid">
-      <p className="note">Preview drops exact duplicate rows. Nothing is saved until you approve.</p>
+      <p className="note">Preview stays local. Nothing is saved until you approve.</p>
       <div className="row">
+        <button className="ghost" onClick={() => api.preview(id, dedupe).then(show)}>Preview dedupe</button>
+        <button className="action" onClick={() => api.materialize(id, dedupe, "Deduped").then(() => onDone())}>
+          Approve and keep a local copy
+        </button>
+      </div>
+      <div className="row">
+        <label>
+          Column
+          <input value={column} onChange={(event) => setColumn(event.target.value)} />
+        </label>
+        <label>
+          Cast to
+          <select value={dtype} onChange={(event) => setDtype(event.target.value)}>
+            <option value="float">float</option>
+            <option value="int">int</option>
+            <option value="string">string</option>
+          </select>
+        </label>
+        <label>
+          Fill nulls with
+          <input value={fillValue} onChange={(event) => setFillValue(event.target.value)} />
+        </label>
         <button
           className="ghost"
           onClick={() =>
-            api.preview(id, steps).then((result) => {
-              setPlan(result.plan)
-              setCounts(`${result.input_rows} → ${result.output_rows} rows · writes ${String(result.writes)}`)
-            })
+            api.preview(id, [
+              { op: "cast", columns: [column], dtype },
+              { op: "fill", columns: [column], fill_value: fillValue },
+            ]).then(show)
           }
         >
-          Preview dedupe
-        </button>
-        <button
-          className="action"
-          onClick={() => api.materialize(id, steps, "Deduped").then(() => onDone())}
-        >
-          Approve and keep a local copy
+          Preview cast and fill
         </button>
       </div>
       {counts ? <p>{counts}</p> : null}
       {plan.map((line) => <p key={line} className="mono">{line}</p>)}
+      {sample.length > 0 ? (
+        <div className="grid">
+          <ResultTable rows={sample} />
+          <button className="ghost" onClick={() => downloadCsv("preview.csv", sample)}>Download CSV</button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -342,4 +506,54 @@ function ModelDesk({
       ) : null}
     </div>
   )
+}
+
+function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const headers = Object.keys(rows[0] ?? {})
+  return (
+    <div className="sheet">
+      <table>
+        <thead>
+          <tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {headers.map((header) => (
+                <td key={header}>{row[header] == null ? "—" : String(row[header])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function percent(value: number | null): string {
+  if (value == null) return "—"
+  return `${Number(value).toFixed(1)}%`
+}
+
+function downloadCsv(name: string, rows: Record<string, unknown>[]) {
+  if (rows.length === 0) return
+  const headers = Object.keys(rows[0])
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(",")),
+  ]
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function csvCell(value: unknown): string {
+  if (value == null) return ""
+  const text = String(value)
+  if (/[",\n]/.test(text)) return `"${text.replaceAll('"', '""')}"`
+  return text
 }

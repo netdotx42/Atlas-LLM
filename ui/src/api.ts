@@ -6,6 +6,7 @@ export type Dataset = {
   column_count: number
   created_at: string
   parent_id: string | null
+  lineage: { op: string; columns?: string[] }[] | null
 }
 
 export type ProfileColumn = {
@@ -23,6 +24,25 @@ export type QualityIssue = {
   severity: string
   column: string | null
   detail: string
+}
+
+export type Suggestion = {
+  id: string
+  label: string
+  reason: string
+  steps: { op: string; columns?: string[]; dtype?: string; fill_value?: string | number }[]
+}
+
+export type ColumnDetail = {
+  column: string
+  type: string
+  nulls: number
+  null_percentage: number
+  distinct: number
+  min: string | null
+  max: string | null
+  sensitive: boolean
+  top: { value: string | null; n: number }[]
 }
 
 export type Draft = {
@@ -67,6 +87,9 @@ export const api = {
     ),
   quality: (id: string) =>
     request<{ status: string; issues: QualityIssue[] }>(`/datasets/${id}/quality`),
+  column: (id: string, name: string) =>
+    request<ColumnDetail>(`/datasets/${id}/columns/${encodeURIComponent(name)}`),
+  suggestions: (id: string) => request<{ actions: Suggestion[] }>(`/datasets/${id}/suggestions`),
   ask: (id: string, question: string) =>
     request<{ grounded: boolean; answer: string; evidence: { source: string; detail: string }[] }>(
       `/datasets/${id}/ask`,

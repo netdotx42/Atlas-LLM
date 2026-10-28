@@ -101,4 +101,4 @@ def _read(source: Path, kind: str) -> pl.DataFrame:
 def _stamp() -> str:
     from datetime import UTC, datetime
 
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")

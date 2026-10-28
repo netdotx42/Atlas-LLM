@@ -13,14 +13,15 @@ from pydantic import BaseModel, Field, ValidationError
 from atlas import __version__
 from atlas.config import Settings
 from atlas.explore.ask import answer_question
+from atlas.explore.suggest import suggest_actions
 from atlas.ingest.loader import IngestError, ingest_file
 from atlas.metadata.store import DatasetRow, DraftRow, MetadataStore
 from atlas.model.draft import build_prompt, parse_draft
 from atlas.model.parse import ModelOutputError
 from atlas.model.runtime import LlamaCompleter, ModelUnavailable
 from atlas.pipeline.preview import PipelineError, Step, apply_steps, preview_frame
-from atlas.profile.profiler import profile_dataset
-from atlas.quality.checks import quality_report
+from atlas.profile.profiler import column_detail, profile_dataset
+from atlas.quality.checks import column_facts, quality_report, schema_delta
 from atlas.query.run import run_bound_select
 from atlas.safety.mask import mask_row
 from atlas.safety.sql import SqlRejected, prepare_select
@@ -135,6 +136,7 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
                     "column_count": row.column_count,
                     "created_at": row.created_at,
                     "parent_id": row.parent_id,
+                    "lineage": _lineage(row.lineage),
                 }
                 for row in rows
             ]
@@ -151,6 +153,16 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
     def quality(dataset_id: str) -> dict:
         row = _require(store, dataset_id)
         report = quality_report(Path(row.storage_path), null_error_rate=settings.null_error_rate)
+        previous = _previous_same_name(store, row)
+        if previous is not None:
+            delta = schema_delta(
+                column_facts(Path(previous.storage_path)),
+                column_facts(Path(row.storage_path)),
+            )
+            if delta:
+                report["issues"] = [*report["issues"], *delta]
+                if report["status"] == "pass":
+                    report["status"] = "warn"
         store.audit(
             "quality",
             outcome="ok",
@@ -158,6 +170,21 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
             detail=report["status"],
         )
         return {"id": row.id, "name": row.name, **report}
+
+    @app.get("/datasets/{dataset_id}/columns/{column}")
+    def column(dataset_id: str, column: str) -> dict:
+        row = _require(store, dataset_id)
+        try:
+            detail = column_detail(Path(row.storage_path), column)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return detail
+
+    @app.get("/datasets/{dataset_id}/suggestions")
+    def suggestions(dataset_id: str) -> dict:
+        row = _require(store, dataset_id)
+        report = quality_report(Path(row.storage_path), null_error_rate=settings.null_error_rate)
+        return {"actions": suggest_actions(report)}
 
     @app.post("/datasets/{dataset_id}/sql")
     def query(dataset_id: str, body: SqlBody) -> dict:
@@ -202,9 +229,22 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
     def create_draft(dataset_id: str, spec: DraftSpec) -> dict:
         row = _require(store, dataset_id)
         columns = _column_names(Path(row.storage_path))
+        join_columns: set[str] | None = None
+        allow = {"dataset"}
         try:
-            sql = compile_spec(spec, set(columns), max_rows=settings.max_rows)
-            prepare_select(sql, allow_tables={"dataset"}, max_rows=settings.max_rows)
+            if spec.join is not None:
+                if spec.join.dataset_id == dataset_id:
+                    raise CompileError("Join needs a different dataset")
+                other = _require(store, spec.join.dataset_id)
+                join_columns = set(_column_names(_warehouse_file(settings, other.storage_path)))
+                allow.add(f"ds_{spec.join.dataset_id}")
+            sql = compile_spec(
+                spec,
+                set(columns),
+                max_rows=settings.max_rows,
+                join_columns=join_columns,
+            )
+            prepare_select(sql, allow_tables=allow, max_rows=settings.max_rows)
         except (CompileError, SqlRejected) as exc:
             store.audit("sql_draft", outcome="rejected", dataset_id=dataset_id, detail=str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -251,12 +291,17 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
         table = f"ds_{dataset_id}"
         bound = _bind_dataset(draft.sql, table)
         try:
-            statement = prepare_select(bound, allow_tables={table}, max_rows=settings.max_rows)
+            extras = _join_tables(settings, bound, table)
+            statement = prepare_select(
+                bound,
+                allow_tables={table, *extras},
+                max_rows=settings.max_rows,
+            )
         except SqlRejected as exc:
             store.audit("sql", outcome="rejected", dataset_id=dataset_id, detail=str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         path = _warehouse_file(settings, row.storage_path)
-        columns, rows = _execute(store, dataset_id, path, table, statement)
+        columns, rows = _execute(store, dataset_id, path, table, statement, extras)
         store.set_draft_status(draft_id, "executed", draft.note)
         return {
             "draft_id": draft_id,
@@ -461,9 +506,50 @@ def _bind_dataset(sql: str, table: str) -> str:
     return re.sub(r"\bdataset\b", table, sql, flags=re.IGNORECASE)
 
 
-def _execute(store: MetadataStore, dataset_id: str, path: Path, table: str, statement: str):
+def _lineage(raw: str | None) -> list | None:
+    if not raw:
+        return None
     try:
-        columns, rows = run_bound_select(path, statement, table)
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def _previous_same_name(store: MetadataStore, row: DatasetRow) -> DatasetRow | None:
+    earlier = [
+        item
+        for item in store.list_datasets()
+        if item.name == row.name and item.id != row.id and item.created_at < row.created_at
+    ]
+    if not earlier:
+        return None
+    return max(earlier, key=lambda item: item.created_at)
+
+
+def _join_tables(settings: Settings, sql: str, primary: str) -> dict[str, Path]:
+    extras: dict[str, Path] = {}
+    root = settings.warehouse_dir.resolve()
+    for name in set(re.findall(r"\bds_[0-9a-f]{32}\b", sql)):
+        if name == primary:
+            continue
+        path = (root / f"{name[3:]}.parquet").resolve()
+        if path.parent != root or not path.is_file():
+            raise HTTPException(status_code=400, detail="Join target is outside the warehouse")
+        extras[name] = path
+    return extras
+
+
+def _execute(
+    store: MetadataStore,
+    dataset_id: str,
+    path: Path,
+    table: str,
+    statement: str,
+    extras: dict[str, Path] | None = None,
+):
+    try:
+        columns, rows = run_bound_select(path, statement, table, extras)
     except duckdb.Error as exc:
         store.audit("sql", outcome="error", dataset_id=dataset_id, detail=str(exc))
         raise HTTPException(status_code=400, detail="Query failed validation at execution") from exc
@@ -502,7 +588,7 @@ def _draft_payload(draft: DraftRow | None) -> dict:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _sample_csv() -> Path | None:
