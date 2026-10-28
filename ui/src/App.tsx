@@ -3,6 +3,14 @@ import { api, type Dataset, type Draft, type ModelStatus, type ProfileColumn, ty
 
 type Tab = "profile" | "ask" | "sql" | "pipeline" | "model"
 
+const TABS: { id: Tab; label: string }[] = [
+  { id: "profile", label: "Profile" },
+  { id: "ask", label: "Ask" },
+  { id: "sql", label: "SQL" },
+  { id: "pipeline", label: "Pipeline" },
+  { id: "model", label: "Model" },
+]
+
 export function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [selected, setSelected] = useState<string | null>(null)
@@ -72,16 +80,16 @@ export function App() {
           </section>
         ) : (
           <>
-            <header>
+            <header className="head">
               <h2>{current.name}</h2>
               <p className="meta">
                 {current.row_count} rows · {current.column_count} columns · {current.source_kind}
               </p>
             </header>
             <nav className="tabs">
-              {(["profile", "ask", "sql", "pipeline", "model"] as Tab[]).map((item) => (
-                <button key={item} className={tab === item ? "tab active" : "tab"} onClick={() => setTab(item)}>
-                  {item}
+              {TABS.map((item) => (
+                <button key={item.id} className={tab === item.id ? "tab active" : "tab"} onClick={() => setTab(item.id)}>
+                  {item.label}
                 </button>
               ))}
             </nav>
@@ -99,7 +107,7 @@ export function App() {
 
 function Upload({ onFile }: { onFile: (file: File) => void }) {
   return (
-    <label>
+    <label className="file">
       Upload CSV or Parquet
       <input
         type="file"
@@ -130,12 +138,13 @@ function Profile({ id }: { id: string }) {
 
   return (
     <div className="grid">
-      <p className={status === "pass" ? "note" : "warn"}>Quality {status || "…"}</p>
+      <p className={status === "pass" ? "status" : "status warn"}>Quality {status || "…"}</p>
       {issues.map((issue) => (
         <p key={`${issue.code}-${issue.column}`} className="note">
           {issue.severity}: {issue.detail}
         </p>
       ))}
+      <div className="sheet">
       <table>
         <thead>
           <tr><th>Column</th><th>Type</th><th>Nulls</th><th>Distinct</th></tr>
@@ -151,6 +160,7 @@ function Profile({ id }: { id: string }) {
           ))}
         </tbody>
       </table>
+      </div>
       {sample.length > 0 ? <pre className="mono">{JSON.stringify(sample, null, 2)}</pre> : null}
     </div>
   )
