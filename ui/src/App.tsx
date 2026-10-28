@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react"
-import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type ProfileColumn, type QualityIssue, type Suggestion } from "./api"
+import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type PipelineDraft, type ProfileColumn, type QualityIssue, type ReviewEvent, type ScoreCase, type Suggestion } from "./api"
 
-type Tab = "profile" | "ask" | "sql" | "pipeline" | "model"
+type Tab = "profile" | "ask" | "sql" | "pipeline" | "review" | "model"
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "profile", label: "Profile" },
   { id: "ask", label: "Ask" },
   { id: "sql", label: "SQL" },
   { id: "pipeline", label: "Pipeline" },
+  { id: "review", label: "Review" },
   { id: "model", label: "Model" },
 ]
 
@@ -120,6 +121,7 @@ export function App() {
                 }}
               />
             ) : null}
+            {tab === "review" ? <Review /> : null}
             {tab === "model" ? <ModelDesk id={current.id} status={model} onDone={refresh} /> : null}
           </>
         )}
@@ -340,7 +342,9 @@ function Ask({ id }: { id: string }) {
   return (
     <div className="grid">
       <textarea value={question} onChange={(event) => setQuestion(event.target.value)} />
-      <p className="note">Try average of amount, how many distinct region, or is order_id a key.</p>
+      <p className="note">
+        Try min and max of amount, average amount by region, or rows after a date.
+      </p>
       <div>
         <button
           className="action"
@@ -494,14 +498,22 @@ function PipelineDesk({ id, onDone }: { id: string; onDone: (childId?: string) =
   const [dtype, setDtype] = useState("float")
   const [fillValue, setFillValue] = useState("unknown")
   const [localError, setLocalError] = useState("")
+  const [drafts, setDrafts] = useState<PipelineDraft[]>([])
   const dedupe = [{ op: "dedupe" }]
+
+  const load = useCallback(() => {
+    api.pipelineDrafts(id).then((result) => setDrafts(result.drafts)).catch((reason: unknown) => {
+      setLocalError(message(reason))
+    })
+  }, [id])
 
   useEffect(() => {
     setPlan([])
     setCounts("")
     setSample([])
     setLocalError("")
-  }, [id])
+    load()
+  }, [load])
 
   function show(result: { plan: string[]; input_rows: number; output_rows: number; writes: boolean; sample: Record<string, unknown>[] }) {
     setLocalError("")
@@ -514,23 +526,24 @@ function PipelineDesk({ id, onDone }: { id: string; onDone: (childId?: string) =
     setLocalError(message(reason))
   }
 
+  function save(steps: unknown[]) {
+    api
+      .savePipeline(id, steps)
+      .then((result) => {
+        setLocalError("")
+        setCounts(`Draft saved. Preview writes ${String(result.preview.writes)}. Nothing is kept yet.`)
+        load()
+      })
+      .catch(fail)
+  }
+
   return (
     <div className="grid">
-      <p className="note">Preview stays local. Nothing is saved until you approve.</p>
+      <p className="note">Preview stays local. A draft writes nothing until you approve it, then keep a copy.</p>
       {localError ? <p className="err">{localError}</p> : null}
       <div className="row">
         <button className="ghost" onClick={() => api.preview(id, dedupe).then(show).catch(fail)}>Preview dedupe</button>
-        <button
-          className="action"
-          onClick={() =>
-            api
-              .materialize(id, dedupe, "Deduped")
-              .then((created) => onDone(created.id))
-              .catch(fail)
-          }
-        >
-          Approve and keep a local copy
-        </button>
+        <button className="action" onClick={() => save(dedupe)}>Save dedupe draft</button>
       </div>
       <div className="row">
         <label>
@@ -567,7 +580,45 @@ function PipelineDesk({ id, onDone }: { id: string; onDone: (childId?: string) =
         >
           Preview cast and fill
         </button>
+        <button
+          className="ghost"
+          onClick={() =>
+            save([
+              { op: "cast", columns: [column], dtype },
+              { op: "fill", columns: [fillColumn], fill_value: fillValue },
+            ])
+          }
+        >
+          Save cast and fill draft
+        </button>
       </div>
+      {drafts.map((draft) => (
+        <article key={draft.id} className="card">
+          <p className="mono">{draft.steps.map((step) => step.op).join(" → ")}</p>
+          <p className="meta">{draft.status}</p>
+          <div className="row">
+            {draft.status === "drafted" ? (
+              <>
+                <button className="action" onClick={() => api.decidePipeline(id, draft.id, "approve").then(() => { setLocalError(""); load() }).catch(fail)}>Approve</button>
+                <button className="ghost bad" onClick={() => api.decidePipeline(id, draft.id, "reject").then(() => { setLocalError(""); load() }).catch(fail)}>Reject</button>
+              </>
+            ) : null}
+            {draft.status === "approved" ? (
+              <button
+                className="action"
+                onClick={() =>
+                  api
+                    .keepPipeline(id, draft.id, "Derived")
+                    .then((created) => onDone(created.id))
+                    .catch(fail)
+                }
+              >
+                Keep a local copy
+              </button>
+            ) : null}
+          </div>
+        </article>
+      ))}
       {counts ? <p>{counts}</p> : null}
       {plan.map((line) => <p key={line} className="mono">{line}</p>)}
       {sample.length > 0 ? (
@@ -592,6 +643,8 @@ function ModelDesk({
   const [question, setQuestion] = useState("count paid orders by region")
   const [summary, setSummary] = useState("")
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [cases, setCases] = useState<ScoreCase[]>([])
+  const [scoreLine, setScoreLine] = useState("")
   const [localError, setLocalError] = useState("")
 
   return (
@@ -627,6 +680,21 @@ function ModelDesk({
         >
           Draft with the local model
         </button>
+        <button
+          className="ghost"
+          onClick={() =>
+            api
+              .modelScore(id)
+              .then((result) => {
+                setLocalError("")
+                setCases(result.cases)
+                setScoreLine(`${result.passed} passed, ${result.failed} rejected. One attempt each. Nothing ran.`)
+              })
+              .catch((reason: Error) => setLocalError(reason.message))
+          }
+        >
+          Score the drafter
+        </button>
       </div>
       {localError ? <p className="err">{localError}</p> : null}
       {summary ? <pre className="mono">{summary}</pre> : null}
@@ -636,6 +704,52 @@ function ModelDesk({
           <p className="meta">Saved as {draft.status}. Approve it on the SQL tab before it can run.</p>
         </article>
       ) : null}
+      {scoreLine ? <p className="note">{scoreLine}</p> : null}
+      {cases.map((item) => (
+        <p key={item.id} className={item.outcome === "pass" ? "note" : "err"}>
+          {item.id}: {item.outcome}
+          {item.reason ? ` — ${item.reason}` : ""} · attempts {item.attempts} · writes {String(item.writes)}
+        </p>
+      ))}
+    </div>
+  )
+}
+
+function Review() {
+  const [events, setEvents] = useState<ReviewEvent[]>([])
+  const [localError, setLocalError] = useState("")
+
+  useEffect(() => {
+    api.review().then((result) => setEvents(result.events)).catch((reason: unknown) => {
+      setLocalError(message(reason))
+    })
+  }, [])
+
+  return (
+    <div className="grid">
+      <div className="row">
+        <p className="note">Decisions and approved runs. Export is the same log.</p>
+        <button className="ghost" onClick={() => downloadCsv("review.csv", events.map((item) => ({
+          at: item.at,
+          dataset: item.dataset,
+          action: item.action,
+          decision: item.decision,
+          draft: item.draft,
+          rows: item.rows ?? "",
+          detail: item.detail,
+        })))}>
+          Download CSV
+        </button>
+      </div>
+      {localError ? <p className="err">{localError}</p> : null}
+      {events.length === 0 ? <p className="note">No approvals yet.</p> : <ResultTable rows={events.map((item) => ({
+        at: item.at,
+        dataset: item.dataset || "—",
+        action: item.action,
+        decision: item.decision,
+        rows: item.rows ?? "—",
+        draft: item.draft || "—",
+      }))} />}
     </div>
   )
 }

@@ -7,7 +7,7 @@ from uuid import uuid4
 import duckdb
 import polars as pl
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from atlas import __version__
@@ -15,14 +15,16 @@ from atlas.config import Settings
 from atlas.explore.ask import answer_question
 from atlas.explore.suggest import suggest_actions
 from atlas.ingest.loader import IngestError, ingest_file
-from atlas.metadata.store import DatasetRow, DraftRow, MetadataStore
+from atlas.metadata.store import DatasetRow, DraftRow, MetadataStore, PipelineDraftRow
 from atlas.model.draft import build_prompt, parse_draft
 from atlas.model.parse import ModelOutputError
 from atlas.model.runtime import LlamaCompleter, ModelUnavailable
+from atlas.model.score import score_drafter
 from atlas.pipeline.preview import PipelineError, Step, apply_steps, preview_frame
 from atlas.profile.profiler import column_detail, profile_dataset
 from atlas.quality.checks import column_facts, quality_report, schema_delta
 from atlas.query.run import run_bound_select
+from atlas.review.trail import project_review, review_csv
 from atlas.safety.mask import mask_row
 from atlas.safety.sql import SqlRejected, prepare_select
 from atlas.sqlgen.compile import compile_spec
@@ -45,6 +47,10 @@ class DecisionBody(BaseModel):
 class PipelineBody(BaseModel):
     steps: list[Step] = Field(min_length=1, max_length=8)
     approve: bool = False
+    name: str = Field(default="", max_length=200)
+
+
+class NameBody(BaseModel):
     name: str = Field(default="", max_length=200)
 
 
@@ -94,6 +100,19 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
                 for event in events
             ]
         }
+
+
+    @app.get("/review")
+    def review() -> dict:
+        return {"events": _review_rows(store)}
+
+    @app.get("/review.csv")
+    def review_export() -> Response:
+        return Response(
+            review_csv(_review_rows(store)),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=review.csv"},
+        )
 
     @app.post("/datasets", status_code=201)
     async def create_dataset(name: str = Form(...), file: UploadFile = File(...)) -> dict:
@@ -301,7 +320,15 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
             store.audit("sql", outcome="rejected", dataset_id=dataset_id, detail=str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         path = _warehouse_file(settings, row.storage_path)
-        columns, rows = _execute(store, dataset_id, path, table, statement, extras)
+        columns, rows = _execute(
+            store,
+            dataset_id,
+            path,
+            table,
+            statement,
+            extras,
+            draft_id=draft_id,
+        )
         store.set_draft_status(draft_id, "executed", draft.note)
         return {
             "draft_id": draft_id,
@@ -332,6 +359,120 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
             detail=f"rows={report['output_rows']}",
         )
         return {"id": row.id, **report}
+
+    @app.post("/datasets/{dataset_id}/pipeline/drafts", status_code=201)
+    def create_pipeline_draft(dataset_id: str, body: PipelineBody) -> dict:
+        row = _require(store, dataset_id)
+        frame = pl.read_parquet(row.storage_path)
+        try:
+            report = preview_frame(frame, body.steps)
+        except PipelineError as exc:
+            store.audit(
+                "pipeline_draft",
+                outcome="rejected",
+                dataset_id=dataset_id,
+                detail=str(exc),
+            )
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if report.get("writes") is not False:
+            raise HTTPException(status_code=400, detail="A pipeline draft cannot write")
+        draft = PipelineDraftRow(
+            id=uuid4().hex,
+            dataset_id=dataset_id,
+            steps=json.dumps([step.model_dump() for step in body.steps]),
+            status="drafted",
+            note="",
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        store.add_pipeline_draft(draft)
+        store.audit("pipeline_draft", outcome="ok", dataset_id=dataset_id, detail=draft.id)
+        return {"preview": report, **_pipeline_payload(draft)}
+
+    @app.get("/datasets/{dataset_id}/pipeline/drafts")
+    def list_pipeline_drafts(dataset_id: str) -> dict:
+        _require(store, dataset_id)
+        drafts = store.list_pipeline_drafts(dataset_id)
+        return {"drafts": [_pipeline_payload(item) for item in drafts]}
+
+    @app.post("/datasets/{dataset_id}/pipeline/drafts/{draft_id}/decision")
+    def decide_pipeline(dataset_id: str, draft_id: str, body: DecisionBody) -> dict:
+        draft = _require_pipeline(store, dataset_id, draft_id)
+        if draft.status != "drafted":
+            raise HTTPException(status_code=409, detail=f"Draft is already {draft.status}")
+        status = "approved" if body.decision == "approve" else "rejected"
+        updated = store.set_pipeline_status(draft_id, status, body.note)
+        store.audit(
+            "pipeline_decision",
+            outcome=status,
+            dataset_id=dataset_id,
+            detail=draft_id,
+        )
+        return _pipeline_payload(updated)
+
+    @app.post("/datasets/{dataset_id}/pipeline/drafts/{draft_id}/materialize", status_code=201)
+    def materialize_pipeline_draft(dataset_id: str, draft_id: str, body: NameBody) -> dict:
+        row = _require(store, dataset_id)
+        draft = _require_pipeline(store, dataset_id, draft_id)
+        if draft.status != "approved":
+            store.audit(
+                "pipeline_materialize",
+                outcome="rejected",
+                dataset_id=dataset_id,
+                detail="draft not approved",
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Only an approved pipeline draft can be kept",
+            )
+        steps = [Step.model_validate(item) for item in json.loads(draft.steps)]
+        frame = pl.read_parquet(row.storage_path)
+        try:
+            output, plan = apply_steps(frame, steps)
+        except PipelineError as exc:
+            store.audit(
+                "pipeline_materialize",
+                outcome="rejected",
+                dataset_id=dataset_id,
+                detail=str(exc),
+            )
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if output.height > settings.max_ingest_rows:
+            raise HTTPException(status_code=400, detail="Derived dataset exceeds the row limit")
+        child_id = uuid4().hex
+        settings.warehouse_dir.mkdir(parents=True, exist_ok=True)
+        dest = settings.warehouse_dir / f"{child_id}.parquet"
+        output.write_parquet(dest)
+        clean = re.sub(r"[^A-Za-z0-9._ -]+", "", body.name).strip() or f"{row.name} pipeline"
+        child = DatasetRow(
+            id=child_id,
+            name=clean[:200],
+            source_kind="pipeline",
+            filename=f"lineage:{dataset_id}"[:500],
+            storage_path=str(dest),
+            row_count=output.height,
+            column_count=output.width,
+            created_at=_now(),
+            parent_id=dataset_id,
+            lineage=draft.steps,
+        )
+        store.add_dataset(child)
+        store.set_pipeline_status(draft_id, "executed", draft.note)
+        store.audit(
+            "pipeline_materialize",
+            outcome="ok",
+            dataset_id=child_id,
+            detail=f"parent={dataset_id} rows={output.height} draft={draft_id}",
+        )
+        return {
+            "id": child_id,
+            "name": child.name,
+            "parent_id": dataset_id,
+            "row_count": output.height,
+            "column_count": output.width,
+            "plan": plan,
+            "writes_to_production": False,
+        }
 
     @app.post("/datasets/{dataset_id}/pipeline/materialize", status_code=201)
     def pipeline_materialize(dataset_id: str, body: PipelineBody) -> dict:
@@ -478,6 +619,33 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
         store.audit("model_draft", outcome="ok", dataset_id=dataset_id, detail=proposal.tool)
         return result
 
+    @app.post("/datasets/{dataset_id}/model/score")
+    def model_score(dataset_id: str) -> dict:
+        row = _require(store, dataset_id)
+        if not completer.status().get("ready"):
+            store.audit("model_score", outcome="unavailable", dataset_id=dataset_id)
+            raise HTTPException(status_code=503, detail="Local model weights are not installed")
+        columns = _column_names(Path(row.storage_path))
+        quality = quality_report(Path(row.storage_path), null_error_rate=settings.null_error_rate)
+        frame = pl.read_parquet(row.storage_path)
+
+        def complete(question: str) -> str:
+            return completer.complete(build_prompt(question, columns, quality["status"]))
+
+        report = score_drafter(
+            complete,
+            columns=set(columns),
+            frame=frame,
+            max_rows=settings.max_rows,
+        )
+        store.audit(
+            "model_score",
+            outcome="ok" if report["failed"] == 0 else "rejected",
+            dataset_id=dataset_id,
+            detail=f"passed={report['passed']} failed={report['failed']}",
+        )
+        return report
+
     _mount_ui(app, settings.ui_dir)
     return app
 
@@ -547,13 +715,17 @@ def _execute(
     table: str,
     statement: str,
     extras: dict[str, Path] | None = None,
+    draft_id: str | None = None,
 ):
     try:
         columns, rows = run_bound_select(path, statement, table, extras)
     except duckdb.Error as exc:
         store.audit("sql", outcome="error", dataset_id=dataset_id, detail=str(exc))
         raise HTTPException(status_code=400, detail="Query failed validation at execution") from exc
-    store.audit("sql", outcome="ok", dataset_id=dataset_id, detail=f"rows={len(rows)}")
+    detail = f"rows={len(rows)}"
+    if draft_id:
+        detail = f"draft={draft_id} {detail}"
+    store.audit("sql", outcome="ok", dataset_id=dataset_id, detail=detail)
     return columns, rows
 
 
@@ -571,6 +743,44 @@ def _require_draft(store: MetadataStore, dataset_id: str, draft_id: str) -> Draf
     if draft is None or draft.dataset_id != dataset_id:
         raise HTTPException(status_code=404, detail="Draft not found")
     return draft
+
+
+def _require_pipeline(store: MetadataStore, dataset_id: str, draft_id: str) -> PipelineDraftRow:
+    draft = store.get_pipeline_draft(draft_id)
+    if draft is None or draft.dataset_id != dataset_id:
+        raise HTTPException(status_code=404, detail="Pipeline draft not found")
+    return draft
+
+
+def _pipeline_payload(draft: PipelineDraftRow | None) -> dict:
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Pipeline draft not found")
+    return {
+        "id": draft.id,
+        "status": draft.status,
+        "note": draft.note,
+        "steps": json.loads(draft.steps),
+        "created_at": draft.created_at,
+    }
+
+
+def _review_rows(store: MetadataStore) -> list[dict]:
+    events = [
+        {
+            "created_at": event.created_at,
+            "action": event.action,
+            "dataset_id": event.dataset_id,
+            "outcome": event.outcome,
+            "detail": event.detail,
+        }
+        for event in store.list_audit(limit=200)
+    ]
+    datasets = {row.id: row.name for row in store.list_datasets()}
+    drafts: dict[str, str] = {}
+    for dataset_id in datasets:
+        for draft in store.list_drafts(dataset_id):
+            drafts[draft.id] = draft.sql
+    return project_review(events, datasets=datasets, drafts=drafts)
 
 
 def _draft_payload(draft: DraftRow | None) -> dict:

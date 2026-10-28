@@ -35,6 +35,18 @@ class DraftRow(Base):
     updated_at: Mapped[str] = mapped_column(String(40))
 
 
+class PipelineDraftRow(Base):
+    __tablename__ = "pipeline_drafts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(32))
+    steps: Mapped[str] = mapped_column(Text)  # JSON text
+    status: Mapped[str] = mapped_column(String(16))
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+
+
 class AuditRow(Base):
     __tablename__ = "audit_events"
 
@@ -122,6 +134,42 @@ class MetadataStore:
     def set_draft_status(self, draft_id: str, status: str, note: str = "") -> DraftRow | None:
         with self._session() as session:
             row = session.get(DraftRow, draft_id)
+            if row is None:
+                return None
+            row.status = status
+            row.note = note[:1000]
+            row.updated_at = _now()
+            session.commit()
+            session.expunge(row)
+            return row
+
+    def add_pipeline_draft(self, row: PipelineDraftRow) -> None:
+        with self._session() as session:
+            session.add(row)
+            session.commit()
+
+    def get_pipeline_draft(self, draft_id: str) -> PipelineDraftRow | None:
+        with self._session() as session:
+            row = session.get(PipelineDraftRow, draft_id)
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def list_pipeline_drafts(self, dataset_id: str) -> list[PipelineDraftRow]:
+        with self._session() as session:
+            rows = session.scalars(
+                select(PipelineDraftRow)
+                .where(PipelineDraftRow.dataset_id == dataset_id)
+                .order_by(PipelineDraftRow.created_at.desc())
+            ).all()
+            session.expunge_all()
+            return list(rows)
+
+    def set_pipeline_status(
+        self, draft_id: str, status: str, note: str = ""
+    ) -> PipelineDraftRow | None:
+        with self._session() as session:
+            row = session.get(PipelineDraftRow, draft_id)
             if row is None:
                 return None
             row.status = status

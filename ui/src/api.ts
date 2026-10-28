@@ -52,6 +52,36 @@ export type Draft = {
   note: string
 }
 
+export type ReviewEvent = {
+  at: string
+  dataset: string
+  action: string
+  decision: string
+  draft: string
+  sql: string
+  rows: number | null
+  detail: string
+}
+
+export type ScoreCase = {
+  id: string
+  question: string
+  expect: string
+  tool: string | null
+  outcome: string
+  reason: string
+  attempts: number
+  writes: boolean
+}
+
+export type PipelineDraft = {
+  id: string
+  status: string
+  note: string
+  steps: { op: string; columns?: string[] }[]
+  created_at: string
+}
+
 export type ModelStatus = {
   ready?: boolean
   executes?: boolean
@@ -128,6 +158,38 @@ export const api = {
       },
     ),
   model: () => request<ModelStatus>("/model"),
+  modelScore: (id: string) =>
+    request<{ passed: number; failed: number; total: number; cases: ScoreCase[] }>(
+      `/datasets/${id}/model/score`,
+      { method: "POST" },
+    ),
+  review: () => request<{ events: ReviewEvent[] }>("/review"),
+  pipelineDrafts: (id: string) =>
+    request<{ drafts: PipelineDraft[] }>(`/datasets/${id}/pipeline/drafts`),
+  savePipeline: (id: string, steps: unknown[]) =>
+    request<{ id: string; status: string; preview: { writes: boolean; output_rows: number } }>(
+      `/datasets/${id}/pipeline/drafts`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ steps }),
+      },
+    ),
+  decidePipeline: (id: string, draftId: string, decision: "approve" | "reject") =>
+    request<PipelineDraft>(`/datasets/${id}/pipeline/drafts/${draftId}/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision }),
+    }),
+  keepPipeline: (id: string, draftId: string, name: string) =>
+    request<{ id: string; name: string; row_count: number; writes_to_production: boolean }>(
+      `/datasets/${id}/pipeline/drafts/${draftId}/materialize`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      },
+    ),
   modelDraft: (id: string, question: string) =>
     request<{
       tool: string
