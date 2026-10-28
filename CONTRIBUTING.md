@@ -34,6 +34,9 @@ uv run pre-commit install
 | `src/atlas/ingest` | CSV and Parquet intake |
 | `src/atlas/profile` | Schema profile and masked sample |
 | `src/atlas/quality` | Missing values and duplicate rows |
+| `src/atlas/explore` | Grounded questions |
+| `src/atlas/sqlgen` | Structured SQL compiler |
+| `src/atlas/pipeline` | Preview and approved local copies |
 | `src/atlas/safety` | SQL gate and masking |
 | `src/atlas/metadata` | SQLite registry and audit log |
 | `src/atlas/api` | FastAPI surface |

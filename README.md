@@ -2,19 +2,16 @@
 
 Private data-engineering assistant. Python-first, local-first, free to run on data you already have.
 
-ATLAS profiles approved CSV and Parquet files, explains the schema, flags missing values and duplicate rows, and runs reviewed read-only SQL. Datasets stay on this machine. A small local model can be added later to draft questions and SQL. It is not allowed to execute them.
+ATLAS profiles approved CSV and Parquet files, answers questions from those files, drafts SQL that waits for approval, and previews a small set of transformations before keeping a local copy.
 
-## Phase 1
+## What it does
 
-This repository is the first build from the product white paper:
+- file ingestion, schema profiling, and quality checks
+- grounded questions (rows, columns, nulls, duplicates, one-column breakdowns)
+- structured SQL drafts with an approve step before execution
+- pipeline preview, then an approved child dataset in the local warehouse
 
-- file ingestion
-- schema profiling
-- deterministic quality checks
-- reviewed SQL with a safety gate
-- SQLite metadata and an audit log
-
-Not in this phase: llama.cpp, embeddings, a React UI, or any write to a production database.
+It does not call a model API, and it does not write to a production database. The plan is in [docs/UPGRADE.md](docs/UPGRADE.md).
 
 ## Develop
 
@@ -26,29 +23,27 @@ uv run pytest
 uv run atlas
 ```
 
-The API listens on `http://127.0.0.1:8000`. Open `/docs` for the routes.
+The API listens on `http://127.0.0.1:8000`. Open `/docs`.
 
 ```bash
 curl -F name=Orders -F file=@samples/orders.csv http://127.0.0.1:8000/datasets
 ```
 
-Then call `/datasets/{id}/profile`, `/datasets/{id}/quality`, and `POST /datasets/{id}/sql` with a body like:
+Then:
 
-```json
-{"sql": "SELECT region, count(*) AS n FROM dataset GROUP BY 1"}
-```
+- `POST /datasets/{id}/ask` with `{"question": "Are there duplicates?"}`
+- `POST /datasets/{id}/sql/drafts` with columns and metrics, then `.../decision` and `.../execute`
+- `POST /datasets/{id}/pipeline/preview` with `{"steps": [{"op": "dedupe"}]}`
 
-Use the name `dataset`. ATLAS binds that to the uploaded file. `DELETE`, other tables, comments, and stacked statements are rejected and audited.
-
-A dev container is in `.devcontainer/` for a clean machine. CI is `.github/workflows/ci.yml`.
+Hand-written SQL still uses `POST /datasets/{id}/sql` and the name `dataset`.
 
 ## Safety
 
-Read-only by default, query limits, schema allowlists, sensitive-field masking, and an audit log. Details are in [docs/SAFETY.md](docs/SAFETY.md) and [SECURITY.md](SECURITY.md).
+Read-only toward source systems, query limits, schema allowlists, sensitive-field masking, draft approval, and an audit log. See [docs/SAFETY.md](docs/SAFETY.md) and [SECURITY.md](SECURITY.md).
 
 ## Layout
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Agent instructions for this repo live in `.agents/skills/enterprise-developer-setup/SKILL.md`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

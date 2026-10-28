@@ -1,0 +1,89 @@
+from atlas.sqlgen.spec import CompileError, DraftSpec, quote_ident, sql_literal
+
+_AGG = {
+    "sum": "sum",
+    "avg": "avg",
+    "min": "min",
+    "max": "max",
+}
+_COMPARE = {
+    "eq": "=",
+    "neq": "<>",
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+}
+
+
+def compile_spec(spec: DraftSpec, columns: set[str], *, max_rows: int) -> str:
+    """Compile a structured spec into a single SELECT against `dataset`."""
+    known = set(columns)
+    if not spec.select and not spec.metrics:
+        raise CompileError("Choose columns or a metric")
+    for name in spec.select:
+        _known(name, known)
+
+    metric_sql: list[str] = []
+    aliases: set[str] = set()
+    for metric in spec.metrics:
+        alias = quote_ident(metric.alias)
+        if metric.alias in aliases or metric.alias in spec.select:
+            raise CompileError(f"Duplicate select name: {metric.alias}")
+        aliases.add(metric.alias)
+        if metric.fn == "count" and metric.column is None:
+            metric_sql.append(f"count(*) AS {alias}")
+            continue
+        if not metric.column:
+            raise CompileError(f"{metric.fn} needs a column")
+        _known(metric.column, known)
+        quoted = quote_ident(metric.column)
+        if metric.fn == "count":
+            metric_sql.append(f"count({quoted}) AS {alias}")
+        elif metric.fn == "count_distinct":
+            metric_sql.append(f"count(DISTINCT {quoted}) AS {alias}")
+        else:
+            metric_sql.append(f"{_AGG[metric.fn]}({quoted}) AS {alias}")
+
+    chosen = [quote_ident(name) for name in spec.select]
+    select_list = ", ".join([*chosen, *metric_sql])
+    where = _where(spec, known)
+    group = ""
+    if spec.metrics and spec.select:
+        group = " GROUP BY " + ", ".join(chosen)
+    order = ""
+    if spec.order_by:
+        if spec.order_by not in set(spec.select) and spec.order_by not in aliases:
+            raise CompileError("order_by must be a selected column or metric alias")
+        direction = "DESC" if spec.descending else "ASC"
+        order = f" ORDER BY {quote_ident(spec.order_by)} {direction}"
+    limit = ""
+    if spec.limit is not None:
+        limit = f" LIMIT {min(spec.limit, max_rows)}"
+    return f"SELECT {select_list} FROM dataset{where}{group}{order}{limit}"
+
+
+def _where(spec: DraftSpec, known: set[str]) -> str:
+    if not spec.where:
+        return ""
+    parts: list[str] = []
+    for item in spec.where:
+        _known(item.column, known)
+        column = quote_ident(item.column)
+        if item.op == "is_null":
+            parts.append(f"{column} IS NULL")
+        elif item.op == "is_not_null":
+            parts.append(f"{column} IS NOT NULL")
+        else:
+            if item.op in {"gt", "gte", "lt", "lte"} and not isinstance(item.value, int | float):
+                raise CompileError(f"{item.op} needs a number")
+            if isinstance(item.value, bool):
+                raise CompileError(f"{item.op} needs a number")
+            parts.append(f"{column} {_COMPARE[item.op]} {sql_literal(item.value)}")
+    return " WHERE " + " AND ".join(parts)
+
+
+def _known(name: str, known: set[str]) -> None:
+    quote_ident(name)
+    if name not in known:
+        raise CompileError(f"Unknown column: {name}")

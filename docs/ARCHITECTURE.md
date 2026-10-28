@@ -1,31 +1,28 @@
 # Architecture
 
-ATLAS helps analysts understand messy tables and keep reporting pipelines reviewable. The product is Python-first and local-first: DuckDB and Polars do the work, SQLite stores metadata, and a small model is a later phase — not a dependency of quality results.
+ATLAS helps analysts understand messy tables and keep reporting pipelines reviewable. DuckDB and Polars do the work. SQLite stores metadata, drafts, and the audit log. Answers and SQL are computed from the file. A model is not on the path.
 
-## This release (phase 1)
+## Flow
 
 ```text
 CSV / Parquet
-    -> ingest (type check, row cap, identifier check)
-    -> Parquet warehouse + SQLite registry
-    -> profile (DuckDB SUMMARIZE, masked sample)
-    -> quality (null rates, exact duplicate rows)
-    -> reviewed SQL (allowlist, keyword gate, LIMIT, masking)
+    -> ingest
+    -> profile and quality
+    -> ask (grounded, or refused)
+    -> SQL draft -> approve -> execute
+    -> pipeline preview -> approve -> local child dataset
 ```
 
-There is no path that writes to a production database. `ATLAS_READ_ONLY` defaults to true, and ingest refuses to run if it is turned off, because a write-capable mode is not implemented.
+Hand-written `SELECT` still goes through the same gate. Generated SQL cannot skip the draft.
 
-## Later, in order
+There is no path that writes to a production database. `approve: true` on a pipeline only creates another Parquet file in the local warehouse, with `parent_id` set.
 
-1. Source-grounded natural language over the profile, using a local ~4B commercially permitted model via llama.cpp. Drafts are text, not executed.
-2. SQL generation that must pass the same `prepare_select` gate, with a human approval step stored in the audit log.
-3. Sandboxed transformation previews (Polars plans shown before they run). No arbitrary Python `exec`.
-4. Repeatable workflow docs, a larger test suite, and deployment packaging beyond the current container.
+## What a later model is allowed to do
 
-React/TypeScript is the planned UI. Phase 1 is the API the UI will call.
+Emit a `DraftSpec` or a list of pipeline steps. It must not emit SQL or Python that runs without `prepare_select` and, for generated SQL, a stored approval.
 
 ## Process model
 
-One FastAPI process. DuckDB is opened per request against a parquet file named by dataset id. The analyst-facing table name is always `dataset`; the physical name is `ds_<id>` and is not client-controlled.
+One FastAPI process. DuckDB is opened per query, the file is loaded to an in-memory table, then external access is turned off before the analyst statement runs. The analyst-facing name is `dataset`. The physical name is `ds_<id>`.
 
-Metadata and the audit log live in `ATLAS_DATA_DIR/metadata.sqlite`. Warehouse files live in `ATLAS_DATA_DIR/warehouse/<id>.parquet`.
+Metadata lives in `ATLAS_DATA_DIR/metadata.sqlite`. Warehouse files live in `ATLAS_DATA_DIR/warehouse/<id>.parquet`.
