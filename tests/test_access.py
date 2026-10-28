@@ -107,6 +107,17 @@ def test_expired_trial_keeps_files_and_a_pass_reopens(tmp_path: Path) -> None:
     assert client.get("/datasets").status_code == 200
 
 
+def test_passes_are_public_and_an_open_trial_can_check_out(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    public = client.get("/auth/passes")
+    assert public.status_code == 200
+    assert [item["id"] for item in public.json()["passes"]] == ["30", "90", "365"]
+    _register(client)
+    checkout = client.post("/auth/checkout", json={"plan": "90"})
+    assert checkout.status_code == 503
+    assert checkout.json()["detail"] == "Payments are not configured"
+
+
 def test_bad_webhook_does_not_grant(tmp_path: Path) -> None:
     client = _client(tmp_path)
     response = client.post(

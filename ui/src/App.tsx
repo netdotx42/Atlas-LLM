@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react"
-import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type Pass, type PipelineDraft, type ProfileColumn, type QualityIssue, type ReviewEvent, type ScoreCase, type Session, type Suggestion } from "./api"
+import { useCallback, useEffect, useState } from "react"
+import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type PipelineDraft, type ProfileColumn, type QualityIssue, type ReviewEvent, type ScoreCase, type Session, type Suggestion } from "./api"
+import { Account } from "./account"
+import { Mark } from "./mark"
+import { Offer } from "./offer"
 
 type Page = "project" | "ask" | "pipeline" | "review"
 
@@ -17,6 +20,13 @@ export function App() {
   const [model, setModel] = useState<ModelStatus | null>(null)
   const [error, setError] = useState("")
   const [page, setPage] = useState<Page>("project")
+  const [localOpen, setLocalOpen] = useState(() => {
+    try {
+      return sessionStorage.getItem("atlas-desk") === "1"
+    } catch {
+      return false
+    }
+  })
 
   const refresh = useCallback(async () => {
     const [listed, status] = await Promise.all([api.datasets(), api.model()])
@@ -35,16 +45,49 @@ export function App() {
   }, [refresh, session])
 
   if (!session) {
-    return <main className="gate"><p className="note">Opening the desk.</p></main>
+    return (
+      <main className="gate">
+        <p className="note">{error || "Opening the desk."}</p>
+      </main>
+    )
   }
   if (session.auth && !session.user) {
-    return <SignIn onDone={setSession} />
+    return <Offer auth onDone={setSession} />
   }
   if (session.auth && session.user && !session.user.open) {
-    return <Passes email={session.user.email} onLeave={() => api.logout().then(() => setSession({ auth: true, open: false, user: null }))} />
+    return (
+      <Account
+        email={session.user.email}
+        daysLeft={session.user.days_left}
+        open={false}
+        layout="gate"
+        onLeave={() => {
+          void api.logout().then(() => setSession({ auth: true, open: false, user: null }))
+        }}
+      />
+    )
+  }
+  if (!session.auth && !localOpen) {
+    return (
+      <Offer
+        auth={false}
+        onDone={setSession}
+        onOpen={() => {
+          sessionStorage.setItem("atlas-desk", "1")
+          setLocalOpen(true)
+        }}
+      />
+    )
   }
 
   const current = datasets.find((item) => item.id === selected) ?? null
+  const paid = new URLSearchParams(window.location.search).get("paid")
+  const paidNote =
+    paid === "1"
+      ? "Payment received. The pass opens as soon as Stripe confirms it."
+      : paid === "0"
+        ? "Checkout canceled. The desk is unchanged."
+        : ""
 
   async function run(task: () => Promise<unknown>) {
     setError("")
@@ -90,12 +133,15 @@ export function App() {
           </button>
           <Upload onFile={(file) => run(() => api.upload(file.name.replace(/\.[^.]+$/, ""), file))} />
           {session.user ? (
-            <button
-              className="ghost"
-              onClick={() => api.logout().then(() => setSession({ auth: true, open: false, user: null }))}
-            >
-              Sign out
-            </button>
+            <Account
+              email={session.user.email}
+              daysLeft={session.user.days_left}
+              open={session.user.open}
+              layout="rail"
+              onLeave={() => {
+                void api.logout().then(() => setSession({ auth: true, open: false, user: null }))
+              }}
+            />
           ) : null}
           {datasets.map((item) => (
             <button
@@ -113,6 +159,7 @@ export function App() {
         </div>
       </aside>
       <main className="main">
+        {paidNote ? <p className="note">{paidNote}</p> : null}
         {error ? <p className="err">{error}</p> : null}
         {!current ? (
           <section className="banner">
@@ -168,82 +215,6 @@ export function App() {
   )
 }
 
-function SignIn({ onDone }: { onDone: (session: Session) => void }) {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [mode, setMode] = useState<"register" | "login">("register")
-  const [error, setError] = useState("")
-
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    setError("")
-    try {
-      const next =
-        mode === "register" ? await api.register(email, password) : await api.login(email, password)
-      onDone(next)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Request failed")
-    }
-  }
-
-  return (
-    <main className="gate">
-      <form className="panel" onSubmit={submit}>
-        <div className="brand">
-          <Mark />
-          <h1>ATLAS</h1>
-        </div>
-        <p className="note">14 days free. No card. A pass is a one-time payment, not a renewal.</p>
-        <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required placeholder="Email" />
-        <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required minLength={10} placeholder="Password, 10 characters" />
-        {error ? <p className="err">{error}</p> : null}
-        <button className="action" type="submit">{mode === "register" ? "Start trial" : "Sign in"}</button>
-        <button className="ghost" type="button" onClick={() => setMode(mode === "register" ? "login" : "register")}>
-          {mode === "register" ? "I already have an account" : "Create an account"}
-        </button>
-      </form>
-    </main>
-  )
-}
-
-function Passes({ email, onLeave }: { email: string; onLeave: () => void }) {
-  const [passes, setPasses] = useState<Pass[]>([])
-  const [error, setError] = useState("")
-
-  useEffect(() => {
-    api.passes().then((body) => setPasses(body.passes)).catch((reason: Error) => setError(reason.message))
-  }, [])
-
-  return (
-    <main className="gate">
-      <section className="panel">
-        <div className="brand">
-          <Mark />
-          <h1>ATLAS</h1>
-        </div>
-        <p className="note">{email} · the trial has ended. Files stay. Choose a pass to open the desk.</p>
-        {error ? <p className="err">{error}</p> : null}
-        <div className="stack">
-          {passes.map((pass) => (
-            <button
-              key={pass.id}
-              className="action"
-              onClick={() =>
-                api.checkout(pass.id).then((body) => {
-                  window.location.href = body.url
-                }).catch((reason: Error) => setError(reason.message))
-              }
-            >
-              {pass.label} · ${(pass.cents / 100).toFixed(0)}
-            </button>
-          ))}
-        </div>
-        <button className="ghost" onClick={onLeave}>Sign out</button>
-      </section>
-    </main>
-  )
-}
-
 function ProjectFacts({
   dataset,
   datasets,
@@ -274,15 +245,6 @@ function ProjectFacts({
         </div>
       ))}
     </div>
-  )
-}
-
-function Mark() {
-  return (
-    <svg className="arc" viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M7.2 19.4C8.7 11.1 12.3 6.8 16 6.8s7.3 4.3 8.8 12.6" />
-      <path d="M11.2 23.6h9.6" />
-    </svg>
   )
 }
 

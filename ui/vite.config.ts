@@ -13,6 +13,8 @@ export default defineConfig({
       "/audit": api,
       "/model": api,
       "/datasets": api,
+      "/auth": api,
+      "/review": api,
     },
   },
 })
