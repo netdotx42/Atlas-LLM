@@ -93,6 +93,26 @@ export type ModelStatus = {
   detail?: string
 }
 
+export type SessionUser = {
+  email: string
+  open: boolean
+  access_until: string
+  days_left: number
+}
+
+export type Session = {
+  auth: boolean
+  open: boolean
+  user: SessionUser | null
+}
+
+export type Pass = {
+  id: string
+  days: number
+  cents: number
+  label: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   const body = (await response.json().catch(() => ({}))) as { detail?: string }
@@ -103,6 +123,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  session: () => request<Session>("/auth/session"),
+  register: (email: string, password: string) =>
+    request<Session>("/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
+  login: (email: string, password: string) =>
+    request<Session>("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  passes: () => request<{ passes: Pass[] }>("/auth/passes"),
+  checkout: (plan: string) =>
+    request<{ url: string }>("/auth/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ plan }),
+    }),
   datasets: () => request<{ datasets: Dataset[] }>("/datasets"),
   sample: () => request<Dataset>("/datasets/sample", { method: "POST" }),
   upload: (name: string, file: File) => {

@@ -47,6 +47,37 @@ class PipelineDraftRow(Base):
     updated_at: Mapped[str] = mapped_column(String(40))
 
 
+class PurchaseRow(Base):
+    __tablename__ = "pass_purchases"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32))
+    plan: Mapped[str] = mapped_column(String(8))
+    days: Mapped[int] = mapped_column(Integer)
+    stripe_session_id: Mapped[str] = mapped_column(String(120), unique=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
+class UserRow(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    email: Mapped[str] = mapped_column(String(200), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[str] = mapped_column(String(40))
+    access_until: Mapped[str] = mapped_column(String(40))
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class SessionRow(Base):
+    __tablename__ = "sessions"
+
+    token: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[str] = mapped_column(String(40))
+
+
 class AuditRow(Base):
     __tablename__ = "audit_events"
 
@@ -178,6 +209,75 @@ class MetadataStore:
             session.commit()
             session.expunge(row)
             return row
+
+    def add_user(self, row: UserRow) -> None:
+        with self._session() as session:
+            session.add(row)
+            session.commit()
+
+    def get_user(self, user_id: str) -> UserRow | None:
+        with self._session() as session:
+            row = session.get(UserRow, user_id)
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def user_by_email(self, email: str) -> UserRow | None:
+        with self._session() as session:
+            row = session.scalar(select(UserRow).where(UserRow.email == email))
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def save_user(self, row: UserRow) -> None:
+        with self._session() as session:
+            session.merge(row)
+            session.commit()
+
+    def add_session(self, row: SessionRow) -> None:
+        with self._session() as session:
+            session.add(row)
+            session.commit()
+
+    def get_session(self, token: str) -> SessionRow | None:
+        with self._session() as session:
+            row = session.get(SessionRow, token)
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def delete_session(self, token: str) -> None:
+        with self._session() as session:
+            row = session.get(SessionRow, token)
+            if row is not None:
+                session.delete(row)
+                session.commit()
+
+    def purchase_by_checkout(self, checkout_id: str) -> PurchaseRow | None:
+        with self._session() as session:
+            row = session.scalar(
+                select(PurchaseRow).where(PurchaseRow.stripe_session_id == checkout_id)
+            )
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def grant_pass(self, user: UserRow, purchase: PurchaseRow) -> bool:
+        with self._session() as session:
+            existing = session.scalar(
+                select(PurchaseRow).where(
+                    PurchaseRow.stripe_session_id == purchase.stripe_session_id
+                )
+            )
+            if existing is not None:
+                return False
+            stored = session.get(UserRow, user.id)
+            if stored is None:
+                return False
+            stored.access_until = user.access_until
+            session.add(purchase)
+            session.commit()
+            return True
 
 
 def _migrate(engine) -> None:

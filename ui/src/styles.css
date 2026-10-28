@@ -255,3 +255,29 @@ select { min-width: 140px; }
   .head h2 { font-size: 28px; }
   .action, .ghost, .dataset, .tab { min-height: 44px; }
 }
+
+.gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #161618, #0c0c0e);
+  box-shadow: var(--shadow);
+}
+
+.panel h1 { letter-spacing: 0.28em; font-size: 20px; }
+.panel input {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: #070708;
+  padding: 12px;
+}

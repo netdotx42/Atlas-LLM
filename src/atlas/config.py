@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     model_n_ctx: int = Field(default=4096, ge=512, le=8192)
     model_max_tokens: int = Field(default=500, ge=64, le=2000)
     ui_dir: Path = Path("ui/dist")
+    auth_enabled: bool = False
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    public_base_url: str = ""
 
     @property
     def resolved_model_path(self) -> Path:

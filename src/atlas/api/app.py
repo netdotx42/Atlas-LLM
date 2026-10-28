@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from atlas import __version__
+from atlas.auth.routes import install_auth
 from atlas.config import Settings
 from atlas.explore.ask import answer_question
 from atlas.explore.suggest import suggest_actions
@@ -646,6 +647,7 @@ def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
         )
         return report
 
+    install_auth(app, settings, store)
     _mount_ui(app, settings.ui_dir)
     return app
 

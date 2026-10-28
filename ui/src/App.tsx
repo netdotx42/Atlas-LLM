@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
-import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type PipelineDraft, type ProfileColumn, type QualityIssue, type ReviewEvent, type ScoreCase, type Suggestion } from "./api"
+import { useCallback, useEffect, useState, type FormEvent } from "react"
+import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type Pass, type PipelineDraft, type ProfileColumn, type QualityIssue, type ReviewEvent, type ScoreCase, type Session, type Suggestion } from "./api"
 
 type Tab = "profile" | "ask" | "sql" | "pipeline" | "review" | "model"
 
@@ -13,6 +13,7 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 export function App() {
+  const [session, setSession] = useState<Session | null>(null)
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [model, setModel] = useState<ModelStatus | null>(null)
@@ -27,8 +28,23 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    api.session().then(setSession).catch((reason: Error) => setError(reason.message))
+  }, [])
+
+  useEffect(() => {
+    if (!session || (session.auth && !session.user?.open)) return
     refresh().catch((reason: Error) => setError(reason.message))
-  }, [refresh])
+  }, [refresh, session])
+
+  if (!session) {
+    return <main className="gate"><p className="note">Opening the desk.</p></main>
+  }
+  if (session.auth && !session.user) {
+    return <SignIn onDone={setSession} />
+  }
+  if (session.auth && session.user && !session.user.open) {
+    return <Passes email={session.user.email} onLeave={() => api.logout().then(() => setSession({ auth: true, open: false, user: null }))} />
+  }
 
   const current = datasets.find((item) => item.id === selected) ?? null
 
@@ -50,7 +66,7 @@ export function App() {
             <Mark />
             <h1>ATLAS</h1>
           </div>
-          <span>LOCAL</span>
+          <span>{session.auth ? `${session.user?.days_left ?? 0}d` : "LOCAL"}</span>
         </div>
         <p className="note">
           Profiles stay on this machine. The model may draft a request. It cannot run one.
@@ -75,6 +91,14 @@ export function App() {
             Load sample orders
           </button>
           <Upload onFile={(file) => run(() => api.upload(file.name.replace(/\.[^.]+$/, ""), file))} />
+          {session.user ? (
+            <button
+              className="ghost"
+              onClick={() => api.logout().then(() => setSession({ auth: true, open: false, user: null }))}
+            >
+              Sign out
+            </button>
+          ) : null}
           {datasets.map((item) => (
             <button
               key={item.id}
@@ -130,6 +154,82 @@ export function App() {
         )}
       </main>
     </div>
+  )
+}
+
+function SignIn({ onDone }: { onDone: (session: Session) => void }) {
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [mode, setMode] = useState<"register" | "login">("register")
+  const [error, setError] = useState("")
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setError("")
+    try {
+      const next =
+        mode === "register" ? await api.register(email, password) : await api.login(email, password)
+      onDone(next)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Request failed")
+    }
+  }
+
+  return (
+    <main className="gate">
+      <form className="panel" onSubmit={submit}>
+        <div className="brand">
+          <Mark />
+          <h1>ATLAS</h1>
+        </div>
+        <p className="note">14 days free. No card. A pass is a one-time payment, not a renewal.</p>
+        <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required placeholder="Email" />
+        <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required minLength={10} placeholder="Password, 10 characters" />
+        {error ? <p className="err">{error}</p> : null}
+        <button className="action" type="submit">{mode === "register" ? "Start trial" : "Sign in"}</button>
+        <button className="ghost" type="button" onClick={() => setMode(mode === "register" ? "login" : "register")}>
+          {mode === "register" ? "I already have an account" : "Create an account"}
+        </button>
+      </form>
+    </main>
+  )
+}
+
+function Passes({ email, onLeave }: { email: string; onLeave: () => void }) {
+  const [passes, setPasses] = useState<Pass[]>([])
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    api.passes().then((body) => setPasses(body.passes)).catch((reason: Error) => setError(reason.message))
+  }, [])
+
+  return (
+    <main className="gate">
+      <section className="panel">
+        <div className="brand">
+          <Mark />
+          <h1>ATLAS</h1>
+        </div>
+        <p className="note">{email} · the trial has ended. Files stay. Choose a pass to open the desk.</p>
+        {error ? <p className="err">{error}</p> : null}
+        <div className="stack">
+          {passes.map((pass) => (
+            <button
+              key={pass.id}
+              className="action"
+              onClick={() =>
+                api.checkout(pass.id).then((body) => {
+                  window.location.href = body.url
+                }).catch((reason: Error) => setError(reason.message))
+              }
+            >
+              {pass.label} · ${(pass.cents / 100).toFixed(0)}
+            </button>
+          ))}
+        </div>
+        <button className="ghost" onClick={onLeave}>Sign out</button>
+      </section>
+    </main>
   )
 }
 
