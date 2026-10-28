@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { api, type ColumnDetail, type Dataset, type Draft, type ModelStatus, type Pass, type PipelineDraft, type ProfileColumn, type QualityIssue, type ReviewEvent, type ScoreCase, type Session, type Suggestion } from "./api"
 
-type Tab = "profile" | "ask" | "sql" | "pipeline" | "review" | "model"
+type Page = "project" | "ask" | "pipeline" | "review"
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "profile", label: "Profile" },
+const PAGES: { id: Page; label: string }[] = [
+  { id: "project", label: "Project" },
   { id: "ask", label: "Ask" },
-  { id: "sql", label: "SQL" },
   { id: "pipeline", label: "Pipeline" },
   { id: "review", label: "Review" },
-  { id: "model", label: "Model" },
 ]
 
 export function App() {
@@ -18,7 +16,7 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(null)
   const [model, setModel] = useState<ModelStatus | null>(null)
   const [error, setError] = useState("")
-  const [tab, setTab] = useState<Tab>("profile")
+  const [page, setPage] = useState<Page>("project")
 
   const refresh = useCallback(async () => {
     const [listed, status] = await Promise.all([api.datasets(), api.model()])
@@ -130,16 +128,25 @@ export function App() {
               </p>
             </header>
             <nav className="tabs">
-              {TABS.map((item) => (
-                <button key={item.id} className={tab === item.id ? "tab active" : "tab"} onClick={() => setTab(item.id)}>
+              {PAGES.map((item) => (
+                <button key={item.id} className={page === item.id ? "tab active" : "tab"} onClick={() => setPage(item.id)}>
                   {item.label}
                 </button>
               ))}
             </nav>
-            {tab === "profile" ? <Profile id={current.id} datasets={datasets} /> : null}
-            {tab === "ask" ? <Ask id={current.id} /> : null}
-            {tab === "sql" ? <SqlDesk id={current.id} datasets={datasets} /> : null}
-            {tab === "pipeline" ? (
+            {page === "project" ? (
+              <>
+                <ProjectFacts dataset={current} datasets={datasets} model={model} />
+                <Profile id={current.id} datasets={datasets} />
+              </>
+            ) : null}
+            {page === "ask" ? (
+              <>
+                <Ask id={current.id} />
+                <SqlDesk id={current.id} datasets={datasets} />
+              </>
+            ) : null}
+            {page === "pipeline" ? (
               <PipelineDesk
                 id={current.id}
                 onDone={async (childId) => {
@@ -148,8 +155,12 @@ export function App() {
                 }}
               />
             ) : null}
-            {tab === "review" ? <Review /> : null}
-            {tab === "model" ? <ModelDesk id={current.id} status={model} onDone={refresh} /> : null}
+            {page === "review" ? (
+              <>
+                <Review />
+                <ModelDesk id={current.id} status={model} onDone={refresh} />
+              </>
+            ) : null}
           </>
         )}
       </main>
@@ -230,6 +241,39 @@ function Passes({ email, onLeave }: { email: string; onLeave: () => void }) {
         <button className="ghost" onClick={onLeave}>Sign out</button>
       </section>
     </main>
+  )
+}
+
+function ProjectFacts({
+  dataset,
+  datasets,
+  model,
+}: {
+  dataset: Dataset
+  datasets: Dataset[]
+  model: ModelStatus | null
+}) {
+  const parent = datasets.find((item) => item.id === dataset.parent_id)
+  const children = datasets.filter((item) => item.parent_id === dataset.id)
+  const facts: [string, string][] = [
+    ["Rows", String(dataset.row_count)],
+    ["Columns", String(dataset.column_count)],
+    ["Source", dataset.source_kind],
+    ["Added", dataset.created_at.slice(0, 10)],
+    ["From", parent?.name ?? "Original file"],
+    ["Derived", children.length ? String(children.length) : "None"],
+    ["Writes", "Off"],
+    ["Model", model?.ready ? "Ready" : "Not installed"],
+  ]
+  return (
+    <div className="facts">
+      {facts.map(([label, value]) => (
+        <div className="fact" key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -394,7 +438,7 @@ function Profile({ id, datasets }: { id: string; datasets: Dataset[] }) {
                     metrics: [{ fn: "count", alias: "n" }],
                     order_by: "n",
                   })
-                  .then(() => setSaved(`Draft saved for ${detail.column}. Approve it on the SQL tab.`))
+                  .then(() => setSaved(`Draft saved for ${detail.column}. Approve it on the Ask page.`))
                   .catch((reason: unknown) => setLocalError(message(reason)))
               }
             >
@@ -813,7 +857,7 @@ function ModelDesk({
       {draft ? (
         <article className="card">
           <p className="mono">{draft.sql}</p>
-          <p className="meta">Saved as {draft.status}. Approve it on the SQL tab before it can run.</p>
+          <p className="meta">Saved as {draft.status}. Approve it on the Ask page before it can run.</p>
         </article>
       ) : null}
       {scoreLine ? <p className="note">{scoreLine}</p> : null}

@@ -122,6 +122,39 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -0.03em; }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
+.facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.fact {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background:
+    var(--gloss),
+    linear-gradient(180deg, #1c1c1f, #121214);
+  box-shadow: var(--shadow);
+}
+
+.fact span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fact strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
 .tab { border-radius: 10px; }
 
 .grid { display: grid; gap: 14px; }
@@ -253,6 +286,7 @@ select { min-width: 140px; }
   }
   .main { padding: 20px 16px 40px; overflow-x: auto; }
   .head h2 { font-size: 28px; }
+  .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .action, .ghost, .dataset, .tab { min-height: 44px; }
 }
 
