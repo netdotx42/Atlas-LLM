@@ -1,0 +1,14 @@
+services:
+  atlas:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      ATLAS_DATA_DIR: /data
+      ATLAS_READ_ONLY: "true"
+    volumes:
+      - atlas-data:/data
+    read_only: false
+
+volumes:
+  atlas-data:

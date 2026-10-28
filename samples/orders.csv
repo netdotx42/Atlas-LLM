@@ -1,0 +1,7 @@
+order_id,customer_email,region,status,amount,notes
+1001,ada@example.com,north,paid,120.50,priority
+1002,,west,paid,80.00,
+1003,grace@example.com,north,refunded,,duplicate candidate
+1001,ada@example.com,north,paid,120.50,priority
+1004,lin@example.com,south,open,45.25,new
+1005,lin@example.com,south,,15.00,missing status

@@ -1,0 +1,20 @@
+name: Feature
+description: Next slice of the ATLAS roadmap
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: Outcome
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Phase
+      options:
+        - Profiling and quality
+        - Reviewed SQL
+        - Local model exploration
+        - Pipeline preview
+        - Packaging
+    validations:
+      required: true

@@ -1,0 +1,17 @@
+name: Bug
+description: A quality check, ingest path, or safety gate misbehaved
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: ATLAS version

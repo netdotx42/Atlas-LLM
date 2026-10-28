@@ -1,0 +1,17 @@
+{
+  "name": "ATLAS",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync --extra dev",
+  "customizations": {
+    "vscode": {
+      "extensions": ["charliermarsh.ruff", "ms-python.python"]
+    }
+  },
+  "forwardPorts": [8000],
+  "remoteEnv": {
+    "ATLAS_DATA_DIR": "var/atlas"
+  }
+}
