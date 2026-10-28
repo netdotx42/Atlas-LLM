@@ -15,6 +15,18 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
     null_error_rate: float = Field(default=0.2, ge=0, le=1)
     read_only: bool = True
+    model_path: Path | None = None
+    model_repo: str = "bartowski/Phi-3.5-mini-instruct-GGUF"
+    model_file: str = "Phi-3.5-mini-instruct-Q4_K_M.gguf"
+    model_n_ctx: int = Field(default=4096, ge=512, le=8192)
+    model_max_tokens: int = Field(default=500, ge=64, le=2000)
+    ui_dir: Path = Path("ui/dist")
+
+    @property
+    def resolved_model_path(self) -> Path:
+        if self.model_path is not None:
+            return self.model_path
+        return Path("var/models") / self.model_file
 
     @property
     def warehouse_dir(self) -> Path:

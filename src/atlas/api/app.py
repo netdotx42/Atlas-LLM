@@ -7,13 +7,17 @@ from uuid import uuid4
 import duckdb
 import polars as pl
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, ValidationError
 
 from atlas import __version__
 from atlas.config import Settings
 from atlas.explore.ask import answer_question
 from atlas.ingest.loader import IngestError, ingest_file
 from atlas.metadata.store import DatasetRow, DraftRow, MetadataStore
+from atlas.model.draft import build_prompt, parse_draft
+from atlas.model.parse import ModelOutputError
+from atlas.model.runtime import LlamaCompleter, ModelUnavailable
 from atlas.pipeline.preview import PipelineError, Step, apply_steps, preview_frame
 from atlas.profile.profiler import profile_dataset
 from atlas.quality.checks import quality_report
@@ -43,11 +47,12 @@ class PipelineBody(BaseModel):
     name: str = Field(default="", max_length=200)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, completer=None) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.warehouse_dir.mkdir(parents=True, exist_ok=True)
     store = MetadataStore(str(settings.metadata_path))
+    completer = completer or LlamaCompleter(settings)
 
     app = FastAPI(
         title="ATLAS",
@@ -338,6 +343,97 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "writes_to_production": False,
         }
 
+    @app.get("/model")
+    def model_status() -> dict:
+        return completer.status()
+
+    @app.post("/datasets/sample", status_code=201)
+    def load_sample() -> dict:
+        sample = _sample_csv()
+        if sample is None:
+            raise HTTPException(status_code=404, detail="Sample file is not available")
+        try:
+            ingested = ingest_file(sample, name="Orders", settings=settings, store=store)
+        except IngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "id": ingested.id,
+            "name": ingested.name,
+            "source_kind": ingested.source_kind,
+            "row_count": ingested.row_count,
+            "column_count": ingested.column_count,
+            "columns": ingested.columns,
+        }
+
+    @app.post("/datasets/{dataset_id}/model/draft")
+    def model_draft(dataset_id: str, body: AskBody) -> dict:
+        row = _require(store, dataset_id)
+        columns = _column_names(Path(row.storage_path))
+        quality = quality_report(Path(row.storage_path), null_error_rate=settings.null_error_rate)
+        prompt = build_prompt(body.question, columns, quality["status"])
+        try:
+            raw = completer.complete(prompt)
+            proposal = parse_draft(raw)
+        except ModelUnavailable as exc:
+            store.audit("model_draft", outcome="unavailable", dataset_id=dataset_id)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (ModelOutputError, ValidationError, CompileError) as exc:
+            store.audit("model_draft", outcome="rejected", dataset_id=dataset_id, detail=str(exc))
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result: dict = {
+            "tool": proposal.tool,
+            "executed": False,
+            "draft": None,
+            "preview": None,
+            "answer": None,
+        }
+        if proposal.tool == "ask":
+            result["answer"] = answer_question(
+                Path(row.storage_path),
+                body.question,
+                dataset_name=row.name,
+                null_error_rate=settings.null_error_rate,
+            )
+        elif proposal.tool == "sql" and proposal.spec is not None:
+            try:
+                sql = compile_spec(proposal.spec, set(columns), max_rows=settings.max_rows)
+                prepare_select(sql, allow_tables={"dataset"}, max_rows=settings.max_rows)
+            except (CompileError, SqlRejected) as exc:
+                store.audit(
+                    "model_draft",
+                    outcome="rejected",
+                    dataset_id=dataset_id,
+                    detail=str(exc),
+                )
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            draft = DraftRow(
+                id=uuid4().hex,
+                dataset_id=dataset_id,
+                sql=sql,
+                status="drafted",
+                note="local model",
+                created_at=_now(),
+                updated_at=_now(),
+            )
+            store.add_draft(draft)
+            result["draft"] = _draft_payload(draft)
+        elif proposal.tool == "pipeline" and proposal.steps is not None:
+            frame = pl.read_parquet(row.storage_path)
+            try:
+                result["preview"] = preview_frame(frame, proposal.steps)
+            except PipelineError as exc:
+                store.audit(
+                    "model_draft",
+                    outcome="rejected",
+                    dataset_id=dataset_id,
+                    detail=str(exc),
+                )
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            result["steps"] = [step.model_dump() for step in proposal.steps]
+        store.audit("model_draft", outcome="ok", dataset_id=dataset_id, detail=proposal.tool)
+        return result
+
+    _mount_ui(app, settings.ui_dir)
     return app
 
 
@@ -407,6 +503,32 @@ def _draft_payload(draft: DraftRow | None) -> dict:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _sample_csv() -> Path | None:
+    candidates = [
+        Path("samples/orders.csv"),
+        Path(__file__).resolve().parents[3] / "samples" / "orders.csv",
+    ]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def _mount_ui(app: FastAPI, ui_dir: Path) -> None:
+    index = ui_dir / "index.html"
+    if not index.is_file():
+        return
+
+    @app.get("/", include_in_schema=False)
+    def desk():
+        return FileResponse(index)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def desk_file(full_path: str):
+        root = ui_dir.resolve()
+        candidate = (ui_dir / full_path).resolve()
+        if candidate.is_file() and (candidate == root or root in candidate.parents):
+            return FileResponse(candidate)
+        return FileResponse(index)
 
 
 app = create_app()

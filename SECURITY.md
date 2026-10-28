@@ -10,7 +10,8 @@ ATLAS is a local-first data tool. Datasets, metadata, and audit logs stay on the
 - Comments, stacked statements, and write/admin keywords are rejected before DuckDB sees them.
 - Query results are row-limited. DuckDB external access is disabled after the dataset view is bound.
 - Columns whose names look like email, phone, secret, token, or similar are masked in profiles, samples, and query results.
-- Ingest, profile, quality, and SQL attempts are written to the SQLite audit log.
+- Ingest, profile, quality, SQL, and model-draft attempts are written to the SQLite audit log.
+- Local model output is not executed. Invalid JSON is rejected. SQL tools are stored as drafts. Pipeline tools are previews.
 
 ## Reporting
 

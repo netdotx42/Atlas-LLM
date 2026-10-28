@@ -4,7 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-dist/
+/dist/
 build/
 *.egg-info/
 var/
@@ -14,5 +14,7 @@ var/
 *.parquet
 !samples/**
 .DS_Store
-.idea/
-.vscode/
+*.gguf
+*.partial
+ui/node_modules/
+

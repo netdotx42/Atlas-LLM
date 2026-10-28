@@ -2,7 +2,7 @@
 
 The first release ingests files, profiles them, and runs checks. This upgrade adds exploration, generated SQL, and pipelines without a paid model and without a write to any system outside the local warehouse.
 
-A local 4B model is intentionally not required. Facts come from DuckDB and Polars. A later model may only fill the same structured request. It never gets a path that executes its own text.
+A local model is optional. Facts still come from DuckDB and Polars. The model, when installed, may only fill the same structured request. It never gets a path that executes its own text. See [MODEL.md](MODEL.md).
 
 ## Phase 1 — Grounded answers
 

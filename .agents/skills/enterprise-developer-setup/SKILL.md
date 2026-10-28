@@ -20,7 +20,7 @@ Follow this when creating or changing the ATLAS repo. Do not add a paid API, a h
 
 ## Package layout
 
-`src/atlas/` with hatchling. Domains stay separate: `ingest`, `profile`, `quality`, `explore`, `sqlgen`, `pipeline`, `safety`, `metadata`, `api`.
+`src/atlas/` with hatchling. Domains stay separate: `ingest`, `profile`, `quality`, `explore`, `sqlgen`, `pipeline`, `model`, `safety`, `metadata`, `api`. The React desk is `ui/`. `llama-cpp-python` is the optional `model` extra, not a default dependency.
 
 ## Safety, before the feature
 
@@ -28,8 +28,8 @@ Follow this when creating or changing the ATLAS repo. Do not add a paid API, a h
 2. Keep `read_only` true until an approval workflow exists.
 3. Run analyst SQL through `prepare_select`. Allowlist tables. Clamp `LIMIT`.
 4. Mask sensitive column names in anything returned to a caller.
-5. Audit ingest, profile, quality, and SQL, including rejections.
-6. Do not execute model-written text. Generated SQL is a `DraftSpec` compiled by `sqlgen`, stored as a draft, and run only after approval and `prepare_select`. Pipeline steps are the fixed set in `pipeline`.
+5. Audit ingest, profile, quality, SQL, and model drafts, including rejections.
+6. Do not execute model-written text. The local model returns JSON only. Generated SQL is a `DraftSpec` compiled by `sqlgen`, stored as a draft, and run only after approval and `prepare_select`. Pipeline steps are the fixed set in `pipeline` and a model may only preview them.
 
 ## Review files
 
