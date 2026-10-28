@@ -8,7 +8,12 @@ import urllib.parse
 import urllib.request
 from urllib.error import HTTPError
 
-from atlas.auth.accounts import PASSES
+# Live one-time prices on the Sole trader account. Checkout uses these instead of ad-hoc amounts.
+PRICE_IDS = {
+    "30": "price_1UVZYz17sTkAsp8vkCgGHapo",
+    "90": "price_1UVZZ017sTkAsp8vIrnhg1Is",
+    "365": "price_1UVZZ117sTkAsp8vgQzNAVhh",
+}
 
 
 def create_checkout(
@@ -20,7 +25,8 @@ def create_checkout(
     success_url: str,
     cancel_url: str,
 ) -> str:
-    days, cents = PASSES[plan]
+    if plan not in PRICE_IDS:
+        raise KeyError(plan)
     form = {
         "mode": "payment",
         "customer_email": email,
@@ -30,9 +36,7 @@ def create_checkout(
         "success_url": success_url,
         "cancel_url": cancel_url,
         "line_items[0][quantity]": "1",
-        "line_items[0][price_data][currency]": "usd",
-        "line_items[0][price_data][unit_amount]": str(cents),
-        "line_items[0][price_data][product_data][name]": f"ATLAS {days}-day pass",
+        "line_items[0][price]": PRICE_IDS[plan],
     }
     request = urllib.request.Request(
         "https://api.stripe.com/v1/checkout/sessions",
