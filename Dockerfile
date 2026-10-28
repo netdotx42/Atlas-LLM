@@ -13,9 +13,10 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY ui/dist ./ui/dist
 RUN uv sync --no-dev --no-editable \
-    && chown -R atlas:atlas /app
+    && chown -R atlas:atlas /app \
+    && mkdir -p /data \
+    && chown atlas:atlas /data
 
 USER atlas
-RUN mkdir -p /data
 EXPOSE 8000
 CMD ["uv", "run", "--no-dev", "uvicorn", "atlas.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
