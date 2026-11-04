@@ -13,7 +13,7 @@ dependencies = [
   "polars>=1.17.0",
   "pydantic>=2.10.0",
   "pydantic-settings>=2.6.0",
-  "python-multipart>=0.0.17",
+  "python-multipart>=0.0.33",
   "sqlalchemy>=2.0.36",
   "uvicorn[standard]>=0.54.0",
 ]
